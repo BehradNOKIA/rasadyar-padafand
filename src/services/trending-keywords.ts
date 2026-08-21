@@ -1,0 +1,666 @@
+import type { CorrelationSignal } from './correlation';
+import { effectivePubDateMs } from './feed-date';
+import { mlWorker } from './ml-worker';
+import { generateSummary } from './summarization';
+import { SUPPRESSED_TRENDING_TERMS, generateSignalId } from '@/utils/analysis-constants';
+// The pure spike primitives (regex entity extractors, term candidacy, display
+// normalization, spike decision math) live in shared/keyword-spike-core.js
+// (issue #5697) so the server-side get_keyword_spikes MCP tool shares them.
+// This module keeps the stateful machinery: rolling term records, cooldowns,
+// localStorage config, ML enrichment, i18n signal copy.
+import {
+  BASELINE_WINDOW_MS,
+  DEFAULT_MIN_SPIKE_COUNT,
+  DEFAULT_SPIKE_MULTIPLIER,
+  MIN_SPIKE_SOURCE_COUNT,
+  MIN_TOKEN_LENGTH,
+  ROLLING_WINDOW_MS,
+  buildBaseTermCandidates,
+  asDisplayTerm,
+  evaluateSpikeDecision,
+  extractEntities,
+  isEntityShapedTerm,
+  isLikelyProperNoun,
+  toTermKey,
+} from '../../shared/keyword-spike-core.js';
+import { PUBLISHER_FAMILIES, publisherFamilyFor } from '../../shared/publisher-families.js';
+import { t } from '@/services/i18n';
+
+export { extractEntities };
+
+export interface TrendingHeadlineInput {
+  title: string;
+  pubDate: Date;
+  pubDateMissing?: boolean;
+  source: string;
+  link?: string;
+}
+
+interface StoredHeadline {
+  title: string;
+  source: string;
+  link: string;
+  publishedAt: number;
+  ingestedAt: number;
+}
+
+interface TermCandidate {
+  display: string;
+  isEntity: boolean;
+}
+
+interface PendingMLEnrichmentHeadline {
+  headline: TrendingHeadlineInput;
+  baseTermKeys: Set<string>;
+}
+
+interface MLEntity {
+  text: string;
+  type: string;
+  confidence: number;
+}
+
+interface TermRecord {
+  timestamps: number[];
+  baseline7d: number;
+  lastSpikeAlertMs: number;
+  displayTerm: string;
+  headlines: StoredHeadline[];
+}
+
+export interface TrendingSpike {
+  term: string;
+  count: number;
+  baseline: number;
+  multiplier: number;
+  windowMs: number;
+  uniqueSources: number;
+  sourceNames: string[];
+  headlines: StoredHeadline[];
+}
+
+export interface TrendingConfig {
+  blockedTerms: string[];
+  minSpikeCount: number;
+  spikeMultiplier: number;
+  autoSummarize: boolean;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+const BASELINE_REFRESH_MS = HOUR_MS;
+const SPIKE_COOLDOWN_MS = 30 * 60 * 1000;
+const MAX_TRACKED_TERMS = 10000;
+const MAX_AUTO_SUMMARIES_PER_HOUR = 5;
+// A spike can be built from an unbounded number of headlines; the signal that
+// travels to the modal and into the retained signal history must not be.
+// (`sourceNames` needs no cap of its own — distinct feed names are already
+// bounded by the feed registry, and capping it would put `sourceCount` and the
+// names it claims to explain back into disagreement.)
+const MAX_SPIKE_ARTICLES = 6;
+const CONFIG_KEY = 'worldmonitor-trending-config-v1';
+const ML_ENTITY_MIN_CONFIDENCE = 0.75;
+const ML_ENTITY_BATCH_SIZE = 20;
+const ML_ENTITY_TYPES = new Set(['PER', 'ORG', 'LOC', 'MISC']);
+
+const DEFAULT_CONFIG: TrendingConfig = {
+  blockedTerms: [],
+  minSpikeCount: DEFAULT_MIN_SPIKE_COUNT,
+  spikeMultiplier: DEFAULT_SPIKE_MULTIPLIER,
+  autoSummarize: true,
+};
+
+const termFrequency = new Map<string, TermRecord>();
+const seenHeadlines = new Map<string, number>();
+const pendingSignals: CorrelationSignal[] = [];
+const activeSpikeTerms = new Set<string>();
+const autoSummaryRuns: number[] = [];
+
+let cachedConfig: TrendingConfig | null = null;
+let lastBaselineRefreshMs = 0;
+
+function isStorageAvailable(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return typeof window.localStorage !== 'undefined';
+  } catch {
+    return false;
+  }
+}
+
+function uniqueBlockedTerms(terms: string[]): string[] {
+  return Array.from(
+    new Set(
+      terms
+        .map(term => toTermKey(term))
+        .filter(term => term.length > 0)
+    )
+  );
+}
+
+function sanitizeConfig(config: Partial<TrendingConfig> | null | undefined): TrendingConfig {
+  return {
+    blockedTerms: uniqueBlockedTerms(config?.blockedTerms ?? DEFAULT_CONFIG.blockedTerms),
+    minSpikeCount: Math.max(1, Math.round(config?.minSpikeCount ?? DEFAULT_CONFIG.minSpikeCount)),
+    spikeMultiplier: Math.max(1, Number(config?.spikeMultiplier ?? DEFAULT_CONFIG.spikeMultiplier)),
+    autoSummarize: config?.autoSummarize ?? DEFAULT_CONFIG.autoSummarize,
+  };
+}
+
+function readConfig(): TrendingConfig {
+  if (cachedConfig) return cachedConfig;
+  if (!isStorageAvailable()) {
+    cachedConfig = { ...DEFAULT_CONFIG };
+    return cachedConfig;
+  }
+
+  try {
+    const raw = localStorage.getItem(CONFIG_KEY);
+    if (!raw) {
+      cachedConfig = { ...DEFAULT_CONFIG };
+      return cachedConfig;
+    }
+    cachedConfig = sanitizeConfig(JSON.parse(raw) as Partial<TrendingConfig>);
+  } catch {
+    cachedConfig = { ...DEFAULT_CONFIG };
+  }
+  return cachedConfig;
+}
+
+function persistConfig(config: TrendingConfig): void {
+  cachedConfig = config;
+  if (!isStorageAvailable()) return;
+  try {
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+  } catch {}
+}
+
+function getBlockedTermSet(config: TrendingConfig): Set<string> {
+  return new Set([
+    ...Array.from(SUPPRESSED_TRENDING_TERMS).map(term => toTermKey(term)),
+    ...config.blockedTerms.map(term => toTermKey(term)),
+  ]);
+}
+
+function normalizeEntityType(type: string): string {
+  return type.replace(/^[BI]-/, '').trim().toUpperCase();
+}
+
+function normalizeMLEntityText(text: string): string {
+  return text
+    .replace(/^##/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '')
+    .trim();
+}
+
+function collectMLEntities(rawEntities: MLEntity[] | undefined): string[] {
+  if (!rawEntities || rawEntities.length === 0) return [];
+
+  const entities: string[] = [];
+  for (const entity of rawEntities) {
+    const type = normalizeEntityType(entity.type);
+    if (!ML_ENTITY_TYPES.has(type)) continue;
+    if (!Number.isFinite(entity.confidence) || entity.confidence < ML_ENTITY_MIN_CONFIDENCE) continue;
+
+    const normalized = normalizeMLEntityText(entity.text);
+    if (normalized.length < 2 || /^\d+$/.test(normalized)) continue;
+    entities.push(normalized);
+  }
+  return entities;
+}
+
+function dedupeEntityTerms(entities: string[]): string[] {
+  const deduped = new Map<string, string>();
+  for (const entity of entities) {
+    const key = toTermKey(entity);
+    if (!key || deduped.has(key)) continue;
+    deduped.set(key, entity);
+  }
+  return Array.from(deduped.values());
+}
+
+async function extractMLEntitiesForTexts(texts: string[]): Promise<string[][]> {
+  if (!mlWorker.isAvailable || texts.length === 0) {
+    return texts.map(() => []);
+  }
+
+  const entitiesByText: string[][] = [];
+  for (let i = 0; i < texts.length; i += ML_ENTITY_BATCH_SIZE) {
+    const batch = texts.slice(i, i + ML_ENTITY_BATCH_SIZE);
+    const batchResults = await mlWorker.extractEntities(batch);
+    for (const entities of batchResults) {
+      entitiesByText.push(collectMLEntities(entities));
+    }
+  }
+  return entitiesByText;
+}
+
+export async function extractEntitiesWithML(text: string): Promise<string[]> {
+  const regexEntities = extractEntities(text);
+  if (!mlWorker.isAvailable) return dedupeEntityTerms(regexEntities);
+
+  try {
+    const mlEntitiesByText = await extractMLEntitiesForTexts([text]);
+    return dedupeEntityTerms([
+      ...regexEntities,
+      ...(mlEntitiesByText[0] ?? []),
+    ]);
+  } catch (error) {
+    console.debug('[TrendingKeywords] ML entity extraction failed, using regex entities only:', error);
+    return dedupeEntityTerms(regexEntities);
+  }
+}
+
+function headlineKey(headline: TrendingHeadlineInput): string {
+  const publishedAt = Number.isFinite(headline.pubDate.getTime()) ? headline.pubDate.getTime() : 0;
+  return [
+    headline.source.trim().toLowerCase(),
+    (headline.link ?? '').trim().toLowerCase(),
+    headline.title.trim().toLowerCase(),
+    publishedAt,
+  ].join('|');
+}
+
+function pruneOldState(now: number): void {
+  for (const [key, seenAt] of seenHeadlines) {
+    if (now - seenAt > BASELINE_WINDOW_MS) {
+      seenHeadlines.delete(key);
+    }
+  }
+
+  for (const [term, record] of termFrequency) {
+    record.timestamps = record.timestamps.filter(ts => now - ts <= BASELINE_WINDOW_MS);
+    record.headlines = record.headlines.filter(h => now - h.ingestedAt <= ROLLING_WINDOW_MS);
+    if (record.timestamps.length === 0) {
+      termFrequency.delete(term);
+    }
+  }
+
+  while (autoSummaryRuns.length > 0 && now - autoSummaryRuns[0]! > HOUR_MS) {
+    autoSummaryRuns.shift();
+  }
+
+  if (termFrequency.size <= MAX_TRACKED_TERMS) return;
+
+  const ordered = Array.from(termFrequency.entries())
+    .map(([term, record]) => ({ term, latest: record.timestamps[record.timestamps.length - 1] ?? 0 }))
+    .sort((a, b) => a.latest - b.latest);
+
+  for (const { term } of ordered) {
+    if (termFrequency.size <= MAX_TRACKED_TERMS) break;
+    termFrequency.delete(term);
+  }
+}
+
+function maybeRefreshBaselines(now: number): void {
+  if (now - lastBaselineRefreshMs < BASELINE_REFRESH_MS) return;
+  for (const record of termFrequency.values()) {
+    const weekCount = record.timestamps.filter(ts => now - ts <= BASELINE_WINDOW_MS).length;
+    record.baseline7d = weekCount / 7;
+  }
+  lastBaselineRefreshMs = now;
+}
+
+function dedupeHeadlines(headlines: StoredHeadline[]): StoredHeadline[] {
+  const seen = new Set<string>();
+  const unique: StoredHeadline[] = [];
+  for (const headline of headlines) {
+    const key = `${headline.source}|${headline.title}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(headline);
+  }
+  return unique;
+}
+
+/**
+ * Distinct PUBLISHERS behind a window of headlines, as display names.
+ *
+ * #6414 made the alert's count and the names it shows the same fact, so that
+ * the number a user reads is backed by the list beside it. #6428 makes that
+ * fact publishers rather than feed labels: `headline.source` is a feed label,
+ * and one newsroom ships many ("Reuters World" + "Reuters US"), so a
+ * label-keyed Set let a single publisher raise a "4 different news sources"
+ * alert on its own.
+ *
+ * Deduping by family and displaying the publisher keeps both properties —
+ * the count still equals the chips, and both now mean independent outlets.
+ * Per-article evidence is untouched: `headlines` still carries every article
+ * with its own source label and link.
+ */
+function distinctPublisherNames(headlines: StoredHeadline[]): string[] {
+  const byFamily = new Map<string, string>();
+  for (const headline of headlines) {
+    const family = publisherFamilyFor(headline.source);
+    if (!family || byFamily.has(family)) continue;
+    // A curated family displays its publisher name ("BBC" for "BBC Africa").
+    // An unmapped label displays its own original text — the singleton family
+    // id is case-normalized so counting cannot be fooled by casing drift, and
+    // that normalized id is a key, not something to show a user.
+    byFamily.set(family, PUBLISHER_FAMILIES[family]?.publisher ?? headline.source.trim());
+  }
+  return [...byFamily.values()];
+}
+
+function recordTermCandidates(
+  termCandidates: Map<string, TermCandidate>,
+  headline: TrendingHeadlineInput,
+  now: number,
+  blockedTerms: Set<string>
+): boolean {
+  let addedAny = false;
+
+  for (const [term, meta] of termCandidates) {
+    if (blockedTerms.has(term)) continue;
+    if (!meta.isEntity && term.length < MIN_TOKEN_LENGTH) continue;
+
+    let record = termFrequency.get(term);
+    if (!record) {
+      record = {
+        timestamps: [],
+        baseline7d: 0,
+        lastSpikeAlertMs: 0,
+        displayTerm: asDisplayTerm(meta.display),
+        headlines: [],
+      };
+      termFrequency.set(term, record);
+    } else if (/^(CVE-\d{4}-\d{4,}|APT\d+|FIN\d+)$/i.test(meta.display)) {
+      record.displayTerm = asDisplayTerm(meta.display);
+    }
+
+    record.timestamps.push(now);
+    record.headlines.push({
+      title: headline.title,
+      source: headline.source,
+      link: headline.link ?? '',
+      publishedAt: effectivePubDateMs(headline),
+      ingestedAt: now,
+    });
+    addedAny = true;
+  }
+
+  return addedAny;
+}
+
+function checkForSpikes(now: number, config: TrendingConfig, blockedTerms: Set<string>): TrendingSpike[] {
+  const spikes: TrendingSpike[] = [];
+
+  for (const [term, record] of termFrequency) {
+    if (blockedTerms.has(term)) continue;
+
+    const recentCount = record.timestamps.filter(ts => now - ts < ROLLING_WINDOW_MS).length;
+    if (recentCount < config.minSpikeCount) continue;
+
+    const baseline = record.baseline7d;
+    const { isSpike, multiplier } = evaluateSpikeDecision({
+      recentCount,
+      baseline,
+      minSpikeCount: config.minSpikeCount,
+      spikeMultiplier: config.spikeMultiplier,
+    });
+
+    if (!isSpike) continue;
+    if (now - record.lastSpikeAlertMs < SPIKE_COOLDOWN_MS) continue;
+
+    const recentHeadlines = dedupeHeadlines(
+      record.headlines.filter(headline => now - headline.ingestedAt <= ROLLING_WINDOW_MS)
+    );
+    const sourceNames = distinctPublisherNames(recentHeadlines);
+    if (sourceNames.length < MIN_SPIKE_SOURCE_COUNT) continue;
+
+    record.lastSpikeAlertMs = now;
+    spikes.push({
+      term: record.displayTerm,
+      count: recentCount,
+      baseline,
+      multiplier,
+      windowMs: ROLLING_WINDOW_MS,
+      uniqueSources: sourceNames.length,
+      sourceNames,
+      headlines: recentHeadlines,
+    });
+  }
+
+  return spikes.sort((a, b) => b.count - a.count);
+}
+
+function canRunAutoSummary(now: number): boolean {
+  while (autoSummaryRuns.length > 0 && now - autoSummaryRuns[0]! > HOUR_MS) {
+    autoSummaryRuns.shift();
+  }
+  return autoSummaryRuns.length < MAX_AUTO_SUMMARIES_PER_HOUR;
+}
+
+function pushSignal(signal: CorrelationSignal): void {
+  pendingSignals.push(signal);
+  while (pendingSignals.length > 200) {
+    pendingSignals.shift();
+  }
+}
+
+async function isSignificantTerm(term: string, headlines: StoredHeadline[]): Promise<boolean> {
+  const lower = term.toLowerCase();
+
+  if (isEntityShapedTerm(term)) return true;
+
+  if (!mlWorker.isAvailable) {
+    return isLikelyProperNoun(term, headlines);
+  }
+
+  try {
+    const titles = headlines.slice(0, 6).map(h => h.title);
+    const entitiesPerTitle = await mlWorker.extractEntities(titles);
+
+    for (const entities of entitiesPerTitle) {
+      for (const entity of entities) {
+        if (entity.text.toLowerCase().includes(lower) || lower.includes(entity.text.toLowerCase())) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  } catch {
+    return isLikelyProperNoun(term, headlines);
+  }
+}
+
+async function handleSpike(spike: TrendingSpike, config: TrendingConfig): Promise<void> {
+  const termKey = toTermKey(spike.term);
+  if (activeSpikeTerms.has(termKey)) return;
+  activeSpikeTerms.add(termKey);
+
+  try {
+    const significant = await isSignificantTerm(spike.term, spike.headlines);
+    if (!significant) {
+      console.debug(`[TrendingKeywords] Suppressed non-entity term: "${spike.term}"`);
+      return;
+    }
+
+    const windowHours = Math.round((spike.windowMs / HOUR_MS) * 10) / 10;
+    // The evidence the alert is about: the articles that produced the count.
+    // Newest first, THEN capped. `spike.headlines` is in ingestion order over a
+    // 2h window while the per-term cooldown is only 30 minutes, so taking the
+    // head of that array would hand a re-spike the same six up-to-2h-old
+    // headlines it showed last time while the title reports a higher count.
+    // Coarse feed timestamps can tie, so arrival time decides which evidence
+    // is newest within the same publication instant.
+    const articles = [...spike.headlines]
+      .sort((a, b) => b.publishedAt - a.publishedAt || b.ingestedAt - a.ingestedAt)
+      .slice(0, MAX_SPIKE_ARTICLES)
+      .map(headline => ({
+        title: headline.title,
+        source: headline.source,
+        link: headline.link || undefined,
+        ...(headline.publishedAt !== 0 && { publishedAt: headline.publishedAt }),
+      }));
+    // Derived from the FULL deduped window rather than `articles`, then used for
+    // both spike qualification and `sourceCount`, so the count and names stay
+    // the same fact even when one source's only headline falls past the cap.
+    const sourceNames = spike.sourceNames;
+    const headlines = articles.map(article => article.title);
+    const multiplierText = spike.baseline > 0 ? `${spike.multiplier.toFixed(1)}x baseline` : 'cold-start threshold';
+
+    let description = `${spike.term} is appearing across ${sourceNames.length} sources (${spike.count} mentions in ${windowHours}h).`;
+
+    const now = Date.now();
+    if (config.autoSummarize && headlines.length >= 2 && canRunAutoSummary(now)) {
+      autoSummaryRuns.push(now);
+      const summary = await generateSummary(
+        headlines,
+        undefined,
+        `Breaking: "${spike.term}" mentioned ${spike.count}x in ${windowHours}h (${multiplierText})`
+      );
+      if (summary?.summary) {
+        description = summary.summary;
+      }
+    }
+
+    const priorityBoost = spike.multiplier >= 5 ? 0.9 : spike.multiplier >= 3 ? 0.75 : 0.6;
+    const confidence = spike.baseline > 0
+      ? Math.min(0.95, priorityBoost)
+      : Math.min(0.8, 0.45 + spike.count / 20);
+
+    pushSignal({
+      id: generateSignalId(),
+      type: 'keyword_spike',
+      title: t('alerts.trending', { term: spike.term, count: spike.count, hours: windowHours }),
+      description,
+      confidence,
+      timestamp: new Date(),
+      data: {
+        term: spike.term,
+        newsVelocity: spike.count,
+        // No relatedTopics: it was `[spike.term]`, which rendered a chip
+        // repeating the term the user was already reading.
+        baseline: spike.baseline,
+        multiplier: spike.baseline > 0 ? spike.multiplier : undefined,
+        sourceCount: sourceNames.length,
+        sourceNames,
+        articles,
+        explanation: `${spike.term}: ${spike.count} mentions across ${sourceNames.length} sources (${multiplierText})`,
+      },
+    });
+  } catch (error) {
+    console.warn('[TrendingKeywords] Failed to handle spike:', error);
+  } finally {
+    activeSpikeTerms.delete(termKey);
+  }
+}
+
+async function enrichWithMLEntities(headlines: PendingMLEnrichmentHeadline[], ingestedAt: number): Promise<void> {
+  if (headlines.length === 0 || !mlWorker.isAvailable) return;
+
+  try {
+    const texts = headlines.map(entry => entry.headline.title);
+    const mlEntitiesByText = await extractMLEntitiesForTexts(texts);
+    const config = readConfig();
+    const blockedTerms = getBlockedTermSet(config);
+
+    let addedAny = false;
+    for (let i = 0; i < headlines.length; i += 1) {
+      const pending = headlines[i]!;
+      const mlEntities = mlEntitiesByText[i] ?? [];
+      if (mlEntities.length === 0) continue;
+
+      const termCandidates = new Map<string, TermCandidate>();
+      for (const entity of mlEntities) {
+        const termKey = toTermKey(entity);
+        if (!termKey || pending.baseTermKeys.has(termKey)) continue;
+        termCandidates.set(termKey, { display: entity, isEntity: true });
+      }
+
+      if (termCandidates.size === 0) continue;
+      addedAny = recordTermCandidates(termCandidates, pending.headline, ingestedAt, blockedTerms) || addedAny;
+    }
+
+    if (!addedAny) return;
+
+    const now = Date.now();
+    pruneOldState(now);
+    maybeRefreshBaselines(now);
+
+    const spikes = checkForSpikes(now, config, blockedTerms);
+    for (const spike of spikes) {
+      void handleSpike(spike, config).catch(() => {});
+    }
+  } catch (error) {
+    console.debug('[TrendingKeywords] ML entity enrichment skipped:', error);
+  }
+}
+
+export function ingestHeadlines(headlines: TrendingHeadlineInput[]): void {
+  if (headlines.length === 0) return;
+
+  const now = Date.now();
+  const config = readConfig();
+  const blockedTerms = getBlockedTermSet(config);
+  const pendingMLEnrichment: PendingMLEnrichmentHeadline[] = [];
+
+  for (const headline of headlines) {
+    if (!headline.title?.trim()) continue;
+
+    const key = headlineKey(headline);
+    const previouslySeen = seenHeadlines.get(key);
+    if (previouslySeen && now - previouslySeen <= BASELINE_WINDOW_MS) {
+      continue;
+    }
+    seenHeadlines.set(key, now);
+
+    const termCandidates = buildBaseTermCandidates(headline.title);
+    recordTermCandidates(termCandidates, headline, now, blockedTerms);
+    pendingMLEnrichment.push({
+      headline,
+      baseTermKeys: new Set(termCandidates.keys()),
+    });
+  }
+
+  pruneOldState(now);
+  maybeRefreshBaselines(now);
+
+  const spikes = checkForSpikes(now, config, blockedTerms);
+  for (const spike of spikes) {
+    void handleSpike(spike, config).catch(() => {});
+  }
+
+  void enrichWithMLEntities(pendingMLEnrichment, now);
+}
+
+export function drainTrendingSignals(): CorrelationSignal[] {
+  if (pendingSignals.length === 0) return [];
+  return pendingSignals.splice(0, pendingSignals.length);
+}
+
+export function getTrendingConfig(): TrendingConfig {
+  return { ...readConfig() };
+}
+
+export function updateTrendingConfig(update: Partial<TrendingConfig>): TrendingConfig {
+  const next = sanitizeConfig({
+    ...readConfig(),
+    ...update,
+    blockedTerms: update.blockedTerms ?? readConfig().blockedTerms,
+  });
+  persistConfig(next);
+  return { ...next };
+}
+
+export function suppressTrendingTerm(term: string): TrendingConfig {
+  const config = readConfig();
+  const blocked = new Set(config.blockedTerms);
+  blocked.add(toTermKey(term));
+  return updateTrendingConfig({ blockedTerms: Array.from(blocked) });
+}
+
+export function unsuppressTrendingTerm(term: string): TrendingConfig {
+  const config = readConfig();
+  const normalized = toTermKey(term);
+  return updateTrendingConfig({
+    blockedTerms: config.blockedTerms.filter(entry => toTermKey(entry) !== normalized),
+  });
+}
+
+export function getTrackedTermCount(): number {
+  return termFrequency.size;
+}

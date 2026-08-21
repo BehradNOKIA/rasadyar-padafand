@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vite/client"],
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.api.tsbuildinfo"
+  },
+  "include": ["api", "src/generated", "server"],
+  "exclude": ["server/__tests__/**"]
+}

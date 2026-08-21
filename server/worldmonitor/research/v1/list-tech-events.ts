@@ -1,0 +1,551 @@
+/**
+ * RPC: listTechEvents
+ *
+ * Aggregates tech events from three sources:
+ * - Techmeme ICS calendar
+ * - dev.events RSS feed
+ * - Curated major conferences
+ *
+ * Supports filtering by type, mappability, time range, and limit.
+ * Includes geocoding via 500-city coordinate lookup.
+ * Returns graceful error response on failure.
+ */
+
+import type {
+  ServerContext,
+  ListTechEventsRequest,
+  ListTechEventsResponse,
+  TechEvent,
+  TechEventCoords,
+} from '../../../../src/generated/server/worldmonitor/research/v1/service_server';
+import { CITY_COORDS } from '../../../_shared/city-coords';
+import filterParamContracts from '../../../../shared/openapi-filter-param-contracts.json';
+import { CHROME_UA } from '../../../_shared/constants';
+import { resolveTechEventsPaging, type TechEventsPagingPresence } from './_tech-events-paging';
+import { cachedFetchJson } from '../../../_shared/redis';
+import { getRelayBaseUrl, getRelayHeaders } from '../../../_shared/relay';
+
+const REDIS_CACHE_KEY = 'research:tech-events:v1';
+const REDIS_CACHE_TTL = 21600; // 6 hr — weekly event data
+
+/**
+ * Set on the response when neither the seeder nor the cold-start fetch could
+ * supply upstream data. Doubles as the gateway's no-store signal — see the
+ * comment at the early return in `listTechEvents`. Exported for the tests that
+ * pin that contract.
+ */
+export const TECH_EVENTS_UNAVAILABLE_ERROR = 'tech events unavailable: no upstream data';
+
+// ---------- Constants ----------
+
+const ICS_URL = 'https://www.techmeme.com/newsy_events.ics';
+const DEV_EVENTS_RSS = 'https://dev.events/rss.xml';
+const FETCH_TIMEOUT_MS = 8000;
+const TECH_EVENT_TYPES = new Set(filterParamContracts.researchTechEventTypes);
+
+function readTechEventsPagingPresence(ctx: ServerContext): TechEventsPagingPresence {
+  const searchParams = new URL(ctx.request.url, 'http://localhost').searchParams;
+  return {
+    hasLimit: searchParams.has('limit'),
+    hasDays: searchParams.has('days'),
+  };
+}
+
+// ---------- Relay helpers (Railway proxy for blocked sources) ----------
+
+const RSS_ACCEPT = 'application/rss+xml, application/xml, text/xml, text/calendar, */*';
+
+async function fetchTextWithRelay(url: string): Promise<string | null> {
+  // Try direct fetch first
+  try {
+    const resp = await fetch(url, {
+      headers: { 'User-Agent': CHROME_UA },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (resp.ok) {
+      const text = await resp.text();
+      if (text.length > 100) return text;
+      console.warn(`[tech-events] Direct fetch ${url} returned short response (${text.length} chars)`);
+    } else {
+      console.warn(`[tech-events] Direct fetch ${url}: HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    console.warn(`[tech-events] Direct fetch ${url} failed: ${(e as Error).message}`);
+  }
+
+  // Fallback: route through Railway relay (different IP, avoids Vercel edge blocks)
+  const relayBase = getRelayBaseUrl();
+  if (relayBase) {
+    try {
+      const relayUrl = `${relayBase}/rss?url=${encodeURIComponent(url)}`;
+      const resp = await fetch(relayUrl, {
+        headers: getRelayHeaders({ Accept: RSS_ACCEPT }),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text.length > 100) {
+          console.log(`[tech-events] Relay fetch ${url}: success (${text.length} chars)`);
+          return text;
+        }
+      } else {
+        console.warn(`[tech-events] Relay fetch ${url}: HTTP ${resp.status}`);
+      }
+    } catch (e) {
+      console.warn(`[tech-events] Relay fetch ${url} failed: ${(e as Error).message}`);
+    }
+  }
+
+  return null;
+}
+
+// Curated major tech events that may fall off limited RSS feeds
+const CURATED_EVENTS: TechEvent[] = [
+  {
+    id: 'gitex-global-2026',
+    title: 'GITEX Global 2026',
+    type: 'conference',
+    location: 'Dubai World Trade Centre, Dubai',
+    coords: { lat: 25.2285, lng: 55.2867, country: 'UAE', original: 'Dubai World Trade Centre, Dubai', virtual: false },
+    startDate: '2026-12-07',
+    endDate: '2026-12-11',
+    url: 'https://www.gitex.com',
+    source: 'curated',
+    description: 'World\'s largest tech & startup show',
+  },
+  {
+    id: 'token2049-dubai-2026',
+    title: 'TOKEN2049 Dubai 2026',
+    type: 'conference',
+    location: 'Dubai, UAE',
+    coords: { lat: 25.2048, lng: 55.2708, country: 'UAE', original: 'Dubai, UAE', virtual: false },
+    startDate: '2026-04-29',
+    endDate: '2026-04-30',
+    url: 'https://www.token2049.com',
+    source: 'curated',
+    description: 'Premier crypto event in Dubai',
+  },
+  {
+    id: 'collision-2026',
+    title: 'Collision 2026',
+    type: 'conference',
+    location: 'Toronto, Canada',
+    coords: { lat: 43.6532, lng: -79.3832, country: 'Canada', original: 'Toronto, Canada', virtual: false },
+    startDate: '2026-06-22',
+    endDate: '2026-06-25',
+    url: 'https://collisionconf.com',
+    source: 'curated',
+    description: 'North America\'s fastest growing tech conference',
+  },
+  {
+    id: 'web-summit-2026',
+    title: 'Web Summit 2026',
+    type: 'conference',
+    location: 'Lisbon, Portugal',
+    coords: { lat: 38.7223, lng: -9.1393, country: 'Portugal', original: 'Lisbon, Portugal', virtual: false },
+    startDate: '2026-11-02',
+    endDate: '2026-11-05',
+    url: 'https://websummit.com',
+    source: 'curated',
+    description: 'The world\'s premier tech conference',
+  },
+];
+
+// ---------- Geocoding ----------
+
+function normalizeLocation(location: string | null): (TechEventCoords) | null {
+  if (!location) return null;
+
+  // Clean up the location string
+  let normalized = location.toLowerCase().trim();
+
+  // Remove common suffixes/prefixes
+  normalized = normalized.replace(/^hybrid:\s*/i, '');
+  normalized = normalized.replace(/,\s*(usa|us|uk|canada)$/i, '');
+
+  // Direct lookup
+  if (CITY_COORDS[normalized]) {
+    const c = CITY_COORDS[normalized];
+    return { lat: c!.lat, lng: c!.lng, country: c!.country, original: location, virtual: c!.virtual ?? false };
+  }
+
+  // Try removing state/country suffix
+  const parts = normalized.split(',');
+  if (parts.length > 1) {
+    const city = parts[0]!.trim();
+    if (CITY_COORDS[city]) {
+      const c = CITY_COORDS[city]!;
+      return { lat: c.lat, lng: c.lng, country: c.country, original: location, virtual: c.virtual ?? false };
+    }
+  }
+
+  // Try fuzzy match (contains)
+  for (const [key, coords] of Object.entries(CITY_COORDS)) {
+    if (normalized.includes(key) || key.includes(normalized)) {
+      return { lat: coords.lat, lng: coords.lng, country: coords.country, original: location, virtual: coords.virtual ?? false };
+    }
+  }
+
+  return null;
+}
+
+// ---------- ICS Parser ----------
+
+function parseICS(icsText: string): TechEvent[] {
+  const events: TechEvent[] = [];
+  const eventBlocks = icsText.split('BEGIN:VEVENT').slice(1);
+
+  for (const block of eventBlocks) {
+    const summaryMatch = block.match(/SUMMARY:(.+)/);
+    const locationMatch = block.match(/LOCATION:(.+)/);
+    const dtstartMatch = block.match(/DTSTART;VALUE=DATE:(\d+)/);
+    const dtendMatch = block.match(/DTEND;VALUE=DATE:(\d+)/);
+    const urlMatch = block.match(/URL:(.+)/);
+    const uidMatch = block.match(/UID:(.+)/);
+
+    if (summaryMatch && dtstartMatch) {
+      const summary = summaryMatch[1]!.trim();
+      const location = locationMatch ? locationMatch[1]!.trim() : '';
+      const startDate = dtstartMatch[1]!;
+      const endDate = dtendMatch ? dtendMatch[1]! : startDate;
+      const url = urlMatch ? urlMatch[1]!.trim() : '';
+      const uid = uidMatch ? uidMatch[1]!.trim() : '';
+
+      // Determine event type
+      let type = 'other';
+      if (summary.startsWith('Earnings:')) type = 'earnings';
+      else if (summary.startsWith('IPO')) type = 'ipo';
+      else if (location) type = 'conference';
+
+      // Parse coordinates if location exists
+      const coords = normalizeLocation(location || null);
+
+      events.push({
+        id: uid,
+        title: summary,
+        type,
+        location: location,
+        coords: coords ?? undefined,
+        startDate: `${startDate.slice(0, 4)}-${startDate.slice(4, 6)}-${startDate.slice(6, 8)}`,
+        endDate: `${endDate.slice(0, 4)}-${endDate.slice(4, 6)}-${endDate.slice(6, 8)}`,
+        url: url,
+        source: 'techmeme',
+        description: '',
+      });
+    }
+  }
+
+  return events.sort((a, b) => a.startDate.localeCompare(b.startDate));
+}
+
+// ---------- RSS Parser ----------
+
+function parseDevEventsRSS(rssText: string): TechEvent[] {
+  const events: TechEvent[] = [];
+
+  // Simple regex-based RSS parsing for edge runtime
+  const itemMatches = rssText.matchAll(/<item>([\s\S]*?)<\/item>/g);
+
+  for (const match of itemMatches) {
+    const item = match[1]!;
+
+    const titleMatch = item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>|<title>(.*?)<\/title>/);
+    const linkMatch = item.match(/<link>(.*?)<\/link>/);
+    const descMatch = item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>|<description>(.*?)<\/description>/s);
+    const guidMatch = item.match(/<guid[^>]*>(.*?)<\/guid>/);
+
+    const title = titleMatch ? (titleMatch[1] ?? titleMatch[2]) : null;
+    const link = linkMatch ? linkMatch[1] ?? '' : '';
+    const description = descMatch ? (descMatch[1] ?? descMatch[2] ?? '') : '';
+    const guid = guidMatch ? guidMatch[1] ?? '' : '';
+
+    if (!title) continue;
+
+    // Parse date from description: "EventName is happening on Month Day, Year"
+    const dateMatch = description.match(/on\s+(\w+\s+\d{1,2},?\s+\d{4})/i);
+    let startDate: string | null = null;
+    if (dateMatch) {
+      const parsed = new Date(dateMatch[1]!);
+      if (!Number.isNaN(parsed.getTime())) {
+        startDate = parsed.toISOString().split('T')[0]!;
+      }
+    }
+
+    // Parse location from description: various formats
+    let location: string | null = null;
+    const locationMatch = description.match(/(?:in|at)\s+([A-Za-z\s]+,\s*[A-Za-z\s]+)(?:\.|$)/i) ||
+                          description.match(/Location:\s*([^<\n]+)/i);
+    if (locationMatch) {
+      location = locationMatch[1]!.trim();
+    }
+    // Check for "Online" events
+    if (description.toLowerCase().includes('online')) {
+      location = 'Online';
+    }
+
+    // Skip events without valid dates or in the past
+    if (!startDate) continue;
+    const eventDate = new Date(startDate);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    if (eventDate < now) continue;
+
+    const coords = location && location !== 'Online' ? normalizeLocation(location) : null;
+
+    events.push({
+      id: guid || `dev-events-${title.slice(0, 20)}`,
+      title: title,
+      type: 'conference',
+      location: location || '',
+      coords: coords ?? (location === 'Online' ? { lat: 0, lng: 0, country: 'Virtual', original: 'Online', virtual: true } : undefined),
+      startDate: startDate,
+      endDate: startDate, // RSS doesn't have end date
+      url: link,
+      source: 'dev.events',
+      description: '',
+    });
+  }
+
+  return events;
+}
+
+// ---------- Fetch ----------
+
+/** Number of external feeds (Techmeme ICS + dev.events RSS) behind a fetch. */
+const EXTERNAL_SOURCE_COUNT = 2;
+
+/**
+ * Collect the FULL event set: both feeds, plus curated, deduped and sorted.
+ *
+ * Takes no request and applies no narrowing, by design. This is the writer for
+ * the shared, request-independent `research:tech-events:v1` key, so it must
+ * produce what the seeders produce (scripts/ais-relay.cjs `seedTechEvents`,
+ * scripts/seed-research.mjs) — they apply no type/mappable/days/limit filter
+ * either. #5427 happened because this function accepted a request and narrowed
+ * by it, so one caller's view became every caller's view for the 6h TTL. With
+ * no request parameter that bug cannot be expressed here at all.
+ *
+ * Per-request narrowing belongs exclusively to `filterEvents()` on the read
+ * path, which re-applies every filter and recomputes the counts.
+ */
+async function fetchAllTechEvents(): Promise<ListTechEventsResponse> {
+  // Fetch both sources in parallel (direct → relay fallback)
+  const [icsText, rssText] = await Promise.all([
+    fetchTextWithRelay(ICS_URL),
+    fetchTextWithRelay(DEV_EVENTS_RSS),
+  ]);
+
+  let events: TechEvent[] = [];
+  let externalSourcesFailed = 0;
+
+  // Parse Techmeme ICS
+  if (icsText) {
+    const parsed = parseICS(icsText);
+    events.push(...parsed);
+    console.log(`[tech-events] Techmeme ICS: ${parsed.length} events parsed`);
+  } else {
+    externalSourcesFailed++;
+    console.warn(`[tech-events] Techmeme ICS: no data (direct + relay both failed)`);
+  }
+
+  // Parse dev.events RSS
+  if (rssText) {
+    const devEvents = parseDevEventsRSS(rssText);
+    events.push(...devEvents);
+    console.log(`[tech-events] dev.events RSS: ${devEvents.length} events parsed`);
+  } else {
+    externalSourcesFailed++;
+    console.warn(`[tech-events] dev.events RSS: no data (direct + relay both failed)`);
+  }
+
+  // Add curated events (major conferences that may fall off limited RSS feeds)
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  for (const curated of CURATED_EVENTS) {
+    const eventDate = new Date(curated.startDate);
+    if (eventDate >= now) {
+      events.push(curated);
+    }
+  }
+
+  // Deduplicate by title similarity (rough match)
+  const seen = new Set<string>();
+  events = events.filter(e => {
+    const year = e.startDate.slice(0, 4);
+    const key = e.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 30) + year;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Sort by date
+  events.sort((a, b) => a.startDate.localeCompare(b.startDate));
+
+  // No narrowing here — see the docblock. filterEvents() owns it.
+
+  // Add metadata
+  const conferences = events.filter(e => e.type === 'conference');
+  const mappableCount = conferences.filter(e => e.coords && !e.coords.virtual).length;
+
+  if (externalSourcesFailed > 0) {
+    console.warn(`[tech-events] ${externalSourcesFailed}/${EXTERNAL_SOURCE_COUNT} external sources failed, returning ${events.length} events (curated fallback)`);
+  }
+
+  return {
+    success: true,
+    count: events.length,
+    conferenceCount: conferences.length,
+    mappableCount,
+    lastUpdated: new Date().toISOString(),
+    events,
+    error: '',
+  };
+}
+
+// ---------- Geocode + filter ----------
+
+function geocodeEvents(events: TechEvent[]): TechEvent[] {
+  return events.map(e => {
+    if (e.coords) return e;
+    const coords = normalizeLocation(e.location || null);
+    return coords ? { ...e, coords } : e;
+  });
+}
+
+function filterEvents(
+  events: TechEvent[],
+  req: ListTechEventsRequest,
+  pagingPresence: TechEventsPagingPresence,
+): ListTechEventsResponse {
+  const { type, mappable } = req;
+  const { limit, days } = resolveTechEventsPaging(req, pagingPresence);
+
+  let filtered = [...events];
+
+  if (type && type !== 'all') {
+    filtered = TECH_EVENT_TYPES.has(type) ? filtered.filter(e => e.type === type) : [];
+  }
+  if (mappable) {
+    filtered = filtered.filter(e => e.coords && !e.coords.virtual);
+  }
+  if (days > 0) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() + days);
+    filtered = filtered.filter(e => new Date(e.startDate) <= cutoff);
+  }
+  if (limit > 0) {
+    filtered = filtered.slice(0, limit);
+  }
+
+  const conferences = filtered.filter(e => e.type === 'conference');
+  const mappableCount = conferences.filter(e => e.coords && !e.coords.virtual).length;
+
+  return {
+    success: true,
+    count: filtered.length,
+    conferenceCount: conferences.length,
+    mappableCount,
+    lastUpdated: new Date().toISOString(),
+    events: filtered,
+    error: '',
+  };
+}
+
+// ---------- Handler ----------
+
+/**
+ * The cache-miss fetcher, exactly as handed to `cachedFetchJson`.
+ *
+ * Takes no parameters, and neither does `fetchAllTechEvents` beneath it, so
+ * there is no request in this path to narrow by — #5427 is unrepresentable
+ * here rather than merely tested against.
+ *
+ * That is a property of the SHAPE, not a guarantee against every regression:
+ * reintroducing the bug does not require changing this signature, only
+ * ignoring this function and inlining a request-scoped closure at the
+ * `cachedFetchJson` call site. Nothing in the type system stops that, which is
+ * why tests/tech-events-cold-start-widest.test.mts drives `listTechEvents`
+ * end-to-end and asserts on the payload that actually reaches Redis.
+ *
+ * Exported so that behavioural seam stays available to the tests.
+ */
+export async function fetchWidestTechEvents(): Promise<ListTechEventsResponse | null> {
+  const response = await fetchAllTechEvents();
+
+  // Returning null makes cachedFetchJson write a 120s NEG_SENTINEL instead of
+  // a REDIS_CACHE_TTL (6h) payload, so the shared key recovers on the next
+  // request rather than on the seeder's next cycle.
+  //
+  // The test is whether any event actually came from UPSTREAM, not whether a
+  // fetch threw. `CURATED_EVENTS` alone always clears an `events.length > 0`
+  // bar, so a curated-only payload would otherwise be pinned under the
+  // seeder-owned key for 6h and served to every client as `success: true`.
+  // Keying on a fetch-failure counter misses the common shape where a feed
+  // answers HTTP 200 with an error page or an empty calendar: the body clears
+  // fetchTextWithRelay's 100-char floor, so the fetch "succeeded" while
+  // parsing yields nothing. Both shapes collapse to the same question --
+  // did upstream give us anything? -- so ask that directly.
+  //
+  // This is the Seed-Owned Key contract in CONCEPTS.md: a reader answers a
+  // miss with a short-TTL fallback and never poisons the key with a degraded
+  // payload.
+  //
+  // A PARTIAL fetch still caches: one live feed is materially complete
+  // (~26 or ~100 events), and refusing it would drop every caller into the
+  // empty-response window for as long as the other feed stayed down.
+  const hasUpstreamData = response.events.some(e => e.source !== 'curated');
+  return hasUpstreamData ? response : null;
+}
+
+export async function listTechEvents(
+  ctx: ServerContext,
+  req: ListTechEventsRequest,
+): Promise<ListTechEventsResponse> {
+  try {
+    const pagingPresence = readTechEventsPagingPresence(ctx);
+
+    // Primary: read from seed-populated Redis key (Railway relay seeds this every 6h).
+    // The cold-start fallback is request-independent by construction — see
+    // fetchWidestTechEvents. Per-request narrowing happens in filterEvents()
+    // below, never in what gets cached under the shared key.
+    const result = await cachedFetchJson<ListTechEventsResponse>(
+      REDIS_CACHE_KEY,
+      REDIS_CACHE_TTL,
+      fetchWidestTechEvents,
+    );
+
+    // No data at all: the seeder has not populated the key and the cold-start
+    // fetch found nothing upstream. This is NOT the same as "your filters
+    // matched nothing" -- that case flows through filterEvents() below and
+    // legitimately returns count 0 with an empty `error`.
+    //
+    // The non-empty `error` is load-bearing, not decoration: the gateway reads
+    // it via getRpcNoStoreReasonFromJson (server/gateway.ts:1933) and answers
+    // `Cache-Control: no-store`. Without it this route falls to its 'daily'
+    // tier (gateway.ts:265 -> s-maxage=14400), so an outage that Redis now
+    // shrugs off in 120s would instead sit at the shared CDN edge for 4h.
+    // It also lets a client tell "upstream is down" from "no events found".
+    //
+    // `success` stays true because the RPC itself did not fail; a dedicated
+    // `dataAvailable`/`upstreamUnavailable` proto field (as consumer-prices
+    // and natural-events have) would model this better than overloading
+    // `error`, but that needs a schema change beyond this fix.
+    if (!result || result.events.length === 0) {
+      return { success: true, count: 0, conferenceCount: 0, mappableCount: 0, lastUpdated: new Date().toISOString(), events: [], error: TECH_EVENTS_UNAVAILABLE_ERROR };
+    }
+
+    // Apply geocoding (seed stores events without coords) and filter by request params
+    const geocoded = geocodeEvents(result.events);
+    return filterEvents(geocoded, req, pagingPresence);
+  } catch (error) {
+    return {
+      success: false,
+      count: 0,
+      conferenceCount: 0,
+      mappableCount: 0,
+      lastUpdated: new Date().toISOString(),
+      events: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}

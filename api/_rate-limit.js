@@ -1,0 +1,230 @@
+import { Ratelimit } from '@upstash/ratelimit';
+import { Redis } from '@upstash/redis';
+import { jsonResponse } from './_json-response.js';
+import { captureSilentError } from './_sentry-edge.js';
+import {
+  durationToSeconds,
+  limitWithFallback,
+  resetRateLimitFallbackForTest,
+} from './_rate-limit-fallback.js';
+import {
+  RATE_LIMIT_DEGRADED_HEADERS,
+  getClientIp,
+} from './_client-ip.js';
+export {
+  RATE_LIMIT_DEGRADED_HEADERS,
+  UNKNOWN_CLIENT_IP,
+  getClientIp,
+} from './_client-ip.js';
+
+// @upstash/redis defaults to 5 retries with exponential backoff (~4.3s total)
+// before surfacing an unreachable-Redis error. Under the node test runner
+// (NODE_TEST_CONTEXT is set) skip retries so fail-open / fail-closed tests that
+// point UPSTASH_REDIS_REST_URL at a fake host degrade immediately instead of
+// stalling. Production (env unset) keeps the resilient default. Mirrors
+// REDIS_TEST_RETRY_OPTS in server/_shared/rate-limit.ts and PR #3963.
+const REDIS_TEST_RETRY_OPTS = process.env.NODE_TEST_CONTEXT ? { retry: false } : {};
+
+const DEFAULT_RATE_LIMIT_SCOPE = 'global';
+const DEFAULT_RATE_LIMIT = 600;
+const DEFAULT_RATE_LIMIT_WINDOW = '60 s';
+
+let ratelimits = new Map();
+
+function getRateLimitPolicy(opts = {}) {
+  return {
+    scope: opts.scope ?? DEFAULT_RATE_LIMIT_SCOPE,
+    limit: opts.limit ?? DEFAULT_RATE_LIMIT,
+    window: opts.window ?? DEFAULT_RATE_LIMIT_WINDOW,
+  };
+}
+
+function getRatelimit(policy) {
+  const cacheKey = `${policy.scope}|${policy.limit}|${policy.window}`;
+  const cached = ratelimits.get(cacheKey);
+  if (cached) return cached;
+
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+
+  const ratelimit = new Ratelimit({
+    redis: new Redis({ url, token, ...REDIS_TEST_RETRY_OPTS }),
+    limiter: Ratelimit.slidingWindow(policy.limit, policy.window),
+    prefix: policy.scope === DEFAULT_RATE_LIMIT_SCOPE ? 'rl' : `rl:${policy.scope}`,
+    analytics: false,
+  });
+  ratelimits.set(cacheKey, ratelimit);
+
+  return ratelimit;
+}
+
+// Decide the Sentry level for a degraded-rate-limit capture. Upstash runtime
+// transients — the Lua limiter script timing out under fan-out load
+// (`ERR Error running script: execution timed out`), a dropped command, or a
+// network/timeout blip — are absorbed by the fail-open / `failClosed`-503 path,
+// so the user is unaffected. Capture those at `warning` so a sustained Redis
+// outage still escalates by volume without a transient script-timeout drowning
+// genuine error-level signal in the dashboard (WORLDMONITOR-RX; mirrors the
+// SERVICE_UNAVAILABLE `level: 'warning'` precedent in api/user-prefs.ts). A
+// `missing-config` stage is a real deploy misconfiguration and any novel error
+// is unclassified — both stay at `error` so on-call still sees them.
+//
+// `aborted due to timeout` / `TimeoutError` is our OWN deadline reporting in:
+// getEndpointRatelimit arms `AbortSignal.timeout(ENDPOINT_REDIS_ABORT_TIMEOUT_MS)`
+// on the Upstash client, so a stalled transport rejects with a DOMException
+// phrased "The operation was aborted due to timeout" — no `timed out`, no
+// `network`, so the pre-existing alternation scored it `error`. That split the
+// one condition in two: the SDK-race arm throws `Upstash endpoint rate-limit
+// decision timed out` (already `warning`) while the abort arm paged
+// (WORLDMONITOR-VM). Both are absorbed by the same fail-closed 503.
+// Mirrored verbatim in server/_shared/rate-limit.ts.
+//
+// Exported purely as a test seam: the classification is only observable through
+// a Sentry capture otherwise, and a source-regex assertion would false-pass on
+// the mirror drifting. tests/rate-limit.test.mts calls both copies directly.
+export function rateLimitErrorLevel(stage, msg) {
+  if (stage.includes('missing-config')) return 'error';
+  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|aborted due to timeout|TimeoutError|socket hang up|Redis unavailable|Redis unreachable/i.test(msg)) {
+    return 'warning';
+  }
+  return 'error';
+}
+
+// Failure-mode suffixes worth their own Sentry issue. Closed set — unlike a
+// route or scope, these describe HOW the limiter failed, not who called it.
+// Mirrored verbatim in server/_shared/rate-limit.ts.
+const RATE_LIMIT_FINGERPRINT_SUFFIXES = new Set(['missing-config', 'timeout', 'edge-proof']);
+
+/**
+ * Collapse a limiter stage to the low-cardinality token Sentry should GROUP on.
+ *
+ * Stage strings embed the caller (`checkScopedRateLimit:/api/skills/fetch-agentskills`)
+ * so the `stage` TAG can answer "which routes are affected". That is wrong for a
+ * fingerprint: Sentry groups by fingerprint, so the raw stage mints one issue per
+ * caller for a single Redis slowdown. Keep the head, plus a closed set of
+ * failure-mode suffixes; the full stage stays a tag. Exported as a pure function
+ * so the mapping is unit-testable rather than asserted through a Sentry capture.
+ * Mirrored verbatim in server/_shared/rate-limit.ts. (#6454)
+ *
+ * @param {string} stage
+ * @returns {string}
+ */
+export function rateLimitFingerprintStage(stage) {
+  const parts = String(stage ?? '').split(':');
+  const head = parts[0] || 'rate-limit';
+  const last = (parts.length > 1 ? parts[parts.length - 1] : '') ?? '';
+  return RATE_LIMIT_FINGERPRINT_SUFFIXES.has(last) ? `${head}:${last}` : head;
+}
+
+function logRateLimitDegraded(stage, err, ctx) {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Keep the prefix stable — server/_shared/rate-limit.ts emits the same
+  // shape and operators grep across both surfaces.
+  console.error(`[rate-limit] redis-error stage=${stage} msg=${msg}`);
+  captureSilentError(err, {
+    tags: { surface: 'api', component: 'rate-limit', stage },
+    fingerprint: ['rate-limit', 'redis-error', rateLimitFingerprintStage(stage)],
+    ctx,
+    level: rateLimitErrorLevel(stage, msg),
+  });
+}
+
+function rateLimitDegradedResponse(corsHeaders) {
+  return jsonResponse(
+    { error: 'Rate-limit service temporarily unavailable' },
+    503,
+    { ...RATE_LIMIT_DEGRADED_HEADERS, ...corsHeaders },
+  );
+}
+
+/**
+ * @param {Request} request
+ * @param {Record<string, string>} corsHeaders
+ * @param {{ failClosed?: boolean, ctx?: { waitUntil: (p: Promise<unknown>) => void }, scope?: string, limit?: number, window?: import('@upstash/ratelimit').Duration }} [opts]
+ *   When `failClosed` is true and Redis is unavailable, return a 503 with
+ *   the `X-RateLimit-Mode: degraded` marker instead of allowing the
+ *   request through. Pass `true` for endpoints where the rate-limit IS
+ *   the abuse defence (LLM, checkout). Default `false` keeps the
+ *   availability-first posture for general traffic so a Redis blip
+ *   doesn't black-hole the whole site. `ctx` is the Vercel handler
+ *   context — passing it lets the Sentry envelope dispatch survive
+ *   isolate teardown. Top-level Edge handlers may pass `scope`, `limit`,
+ *   and `window` for explicit endpoint budgets while retaining the shared
+ *   degraded/429 response semantics. (#3531)
+ */
+export async function checkRateLimit(request, corsHeaders, opts = {}) {
+  const policy = getRateLimitPolicy(opts);
+  const rl = getRatelimit(policy);
+  if (!rl) {
+    if (opts.failClosed) {
+      logRateLimitDegraded('checkRateLimit:missing-config', new Error('Upstash Redis is not configured'), opts.ctx);
+      return rateLimitDegradedResponse(corsHeaders);
+    }
+    return null;
+  }
+
+  const ip = getClientIp(request);
+  try {
+    const fallbackPrefix = policy.scope === DEFAULT_RATE_LIMIT_SCOPE ? 'rl:fw' : `rl:${policy.scope}:fw`;
+    const result = await limitWithFallback(
+      rl,
+      ip,
+      `${fallbackPrefix}:${ip}`,
+      policy.limit,
+      durationToSeconds(policy.window),
+    );
+
+    // @upstash/ratelimit v2 races the Redis call against its own internal
+    // timeout and RESOLVES `{ success: true, reason: 'timeout' }` rather than
+    // rejecting, so a slow (not down) Redis never reaches the catch below and
+    // is indistinguishable from a genuine allow — the limit vanishes with no
+    // log and no Sentry event. Route it through the same degraded handling as a
+    // thrown Redis error so the bypass window is visible, and so `failClosed`
+    // callers still get their 503. Mirrors checkEndpointRateLimit and
+    // checkScopedRateLimit in server/_shared/rate-limit.ts. (#6412 review)
+    if (result.reason === 'timeout') {
+      logRateLimitDegraded('checkRateLimit:timeout', new Error('Upstash rate-limit decision timed out'), opts.ctx);
+      if (opts.failClosed) return rateLimitDegradedResponse(corsHeaders);
+      return null;
+    }
+
+    const { success, limit, reset } = result;
+
+    if (!success) {
+      // `reset` is a Unix epoch in MILLISECONDS (Upstash convention). The IETF
+      // RateLimit fields carry a delta-seconds reset (`t` / RateLimit-Reset),
+      // NOT an epoch, so derive the remaining-seconds view for them and for
+      // Retry-After. The legacy X-RateLimit-Reset stays epoch-ms unchanged.
+      const resetSeconds = Math.max(0, Math.ceil((reset - Date.now()) / 1000));
+      const windowSeconds = durationToSeconds(policy.window);
+      return jsonResponse({ error: 'Too many requests' }, 429, {
+        // IETF RateLimit fields (draft-ietf-httpapi-ratelimit-headers). The
+        // combined RateLimit member references the "default" policy advertised
+        // on every API response via vercel.json so an agent can self-throttle.
+        'RateLimit-Policy': `"default";q=${limit};w=${windowSeconds}`,
+        'RateLimit-Limit': String(limit),
+        'RateLimit-Remaining': '0',
+        'RateLimit-Reset': String(resetSeconds),
+        RateLimit: `"default";r=0;t=${resetSeconds}`,
+        // Legacy X-RateLimit-* retained for back-compat (Reset is epoch-ms).
+        'X-RateLimit-Limit': String(limit),
+        'X-RateLimit-Remaining': '0',
+        'X-RateLimit-Reset': String(reset),
+        'Retry-After': String(resetSeconds),
+        ...corsHeaders,
+      });
+    }
+
+    return null;
+  } catch (err) {
+    logRateLimitDegraded('checkRateLimit', err, opts.ctx);
+    if (opts.failClosed) return rateLimitDegradedResponse(corsHeaders);
+    return null;
+  }
+}
+
+export function __resetRateLimitForTest() {
+  ratelimits = new Map();
+  resetRateLimitFallbackForTest();
+}

@@ -1,0 +1,35 @@
+retailer:
+  slug: noon_sa
+  name: Noon Saudi Arabia
+  marketCode: sa
+  currencyCode: SAR
+  adapter: search
+  baseUrl: https://www.noon.com/saudi-en
+  enabled: true
+
+  searchConfig:
+    numResults: 5
+    queryTemplate: "{canonicalName} grocery SAR saudi noon"
+    urlPathContains:
+      - /p/
+      - /now-product/
+    # noon.com serves UAE (/uae-en/) and Egypt from the same hosts. The route
+    # filters above are an OR and cannot also pin the storefront, so the market
+    # scope is AND-ed separately — without it a UAE page is published as SAR
+    # and the outlier gate can't see it (AED:SAR is ~1:1.02).
+    urlPathMustContain:
+      - /saudi-en/
+    allowedHosts:
+      - minutes.noon.com
+    extractionFallback: exa
+    requireStrictValidator: true
+
+  rateLimit:
+    requestsPerMinute: 10
+    maxConcurrency: 1
+    delayBetweenRequestsMs: 6000
+
+  discovery:
+    mode: search
+    maxPages: 20
+    seeds: []

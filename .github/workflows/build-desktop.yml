@@ -1,0 +1,558 @@
+name: 'Build Desktop App'
+
+# One published desktop binary (#5908). World Monitor ships as a single build
+# and every variant — tech, finance, commodity, energy, happy — is selected
+# in-app after install. There is deliberately no per-variant build leg or
+# per-variant tag: `/api/version` and `/api/download` read `/releases/latest`,
+# which can only ever resolve one release, so a second release line was
+# unservable by construction.
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        # Defaults to false so a dispatched build is a real, served release.
+        # A draft is invisible to `/releases/latest`, and therefore to
+        # `/api/version` and `/api/download` — it looks shipped without being
+        # downloadable or offered to installed clients (#5908).
+        description: 'Create as draft release (NOT served by /api/version or /api/download until published)'
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+
+jobs:
+  build-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-14'
+            args: '--target aarch64-apple-darwin'
+            node_target: 'aarch64-apple-darwin'
+            label: 'macOS-ARM64'
+            timeout: 180
+          - platform: 'macos-latest'
+            args: '--target x86_64-apple-darwin'
+            node_target: 'x86_64-apple-darwin'
+            label: 'macOS-x64'
+            timeout: 180
+          - platform: 'windows-latest'
+            args: ''
+            node_target: 'x86_64-pc-windows-msvc'
+            label: 'Windows-x64'
+            timeout: 120
+          - platform: 'ubuntu-24.04'
+            args: ''
+            node_target: 'x86_64-unknown-linux-gnu'
+            label: 'Linux-x64'
+            timeout: 120
+          - platform: 'ubuntu-24.04-arm'
+            args: '--target aarch64-unknown-linux-gnu'
+            node_target: 'aarch64-unknown-linux-gnu'
+            label: 'Linux-ARM64'
+            timeout: 120
+
+    runs-on: ${{ matrix.platform }}
+    name: Build (${{ matrix.label }})
+    timeout-minutes: ${{ matrix.timeout }}
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Start job timer
+        shell: bash
+        run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Release client-env preflight (#5905)
+        # A tag-push or published manual release with empty client env secrets
+        # would ship sign-in/Pro/basemap/relay silently disabled again — the
+        # exact regression #5905 fixed. Draft dispatch builds may still run
+        # before the repo secrets exist. Key *presence* in the build steps is
+        # separately enforced by scripts/check-desktop-build-env.mjs in PR CI.
+        shell: bash
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_WS_RELAY_URL: ${{ secrets.VITE_WS_RELAY_URL }}
+          VITE_PMTILES_URL_PUBLIC: ${{ secrets.VITE_PMTILES_URL_PUBLIC }}
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+        run: |
+          MISSING=""
+          for k in VITE_CLERK_PUBLISHABLE_KEY VITE_WS_RELAY_URL VITE_PMTILES_URL_PUBLIC CONVEX_URL; do
+            [ -n "${!k}" ] || MISSING="$MISSING $k"
+          done
+          if [ -n "$MISSING" ]; then
+            if [ "${{ github.event_name }}" = "push" ] || {
+              [ "${{ github.event_name }}" = "workflow_dispatch" ] &&
+              [ "${{ github.event.inputs.draft }}" != "true" ];
+            }; then
+              echo "::error::Release build with empty client env secrets:$MISSING — the shipped app would have sign-in, entitlements, basemap, or relay capabilities silently disabled (#5905). Add the repo secrets before tagging."
+              exit 1
+            fi
+            echo "::warning::Client env secrets empty:$MISSING — this dispatch build will have those capabilities disabled (#5905)."
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
+        with:
+          toolchain: stable
+          targets: ${{ contains(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || (matrix.label == 'Linux-ARM64' && 'aarch64-unknown-linux-gnu' || '') }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
+        with:
+          workspaces: './src-tauri -> target'
+          cache-on-failure: true
+
+      - name: Install Linux system dependencies
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            gstreamer1.0-gl
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check version consistency
+        run: npm run version:check
+
+      - name: Pushed tag matches the version being built (#5908)
+        # The release tag comes from package.json (`tagName: v__VERSION__`), not
+        # from the pushed ref, while the trigger matches any `v*`. Pushing
+        # `v2.11.0` or a leftover `v2.11.0-tech` while package.json still says
+        # 2.10.0 would rebuild and overwrite the LIVE v2.10.0 release rather
+        # than cutting a new one. Fail before anything is uploaded.
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${VERSION}. This build would publish to v${VERSION} and overwrite that release. Bump the version and retag, or delete the stray tag."
+            exit 1
+          fi
+          echo "Tag ${GITHUB_REF_NAME} matches package.json ${VERSION}"
+
+      - name: Refuse to rebuild an already-published release (#5908)
+        # `releaseDraft: true` governs release *creation*. If this tag's release
+        # already exists and is published, tauri-action reuses it and every leg
+        # uploads straight into the live release that `/releases/latest` serves —
+        # so a re-run mutates what installed clients are being offered, with no
+        # draft stage and no completeness gate in front of it. Fail before the
+        # first upload rather than half-way through the matrix.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "absent")
+          case "$IS_DRAFT" in
+            absent) echo "No existing release for $TAG — this run will create it as a draft." ;;
+            true)   echo "Existing draft release for $TAG — this run will add to it." ;;
+            *)      echo "::error::Release $TAG is already published. Re-running would upload assets directly into the live release served by /releases/latest, bypassing the draft stage and the publish completeness gate. Bump the version, or delete/unpublish $TAG first."
+                    exit 1 ;;
+          esac
+
+      - name: Rust dependency security floors (#5518)
+        # The release build is the artifact users install, so verify the
+        # lockfile it is about to compile still clears every recorded advisory
+        # floor. The desktop-config PR gate runs the same check, but a release
+        # can be cut from any ref — this makes the shipped binary the thing
+        # that gets audited, not just the PR that touched src-tauri.
+        run: node scripts/check-rust-security-floors.mjs
+
+      - name: Bundle Node.js runtime
+        shell: bash
+        env:
+          NODE_VERSION: '22.14.0'
+          NODE_TARGET: ${{ matrix.node_target }}
+        run: bash scripts/download-node.sh --target "$NODE_TARGET"
+
+      - name: Verify bundled Node.js payload
+        shell: bash
+        run: |
+          if [ "${{ matrix.node_target }}" = "x86_64-pc-windows-msvc" ]; then
+            test -f src-tauri/sidecar/node/node.exe
+            ls -lh src-tauri/sidecar/node/node.exe
+          else
+            test -f src-tauri/sidecar/node/node
+            test -x src-tauri/sidecar/node/node
+            ls -lh src-tauri/sidecar/node/node
+          fi
+
+      # ── Detect whether Apple signing secrets are configured ──
+      - name: Check Apple signing secrets
+        if: contains(matrix.platform, 'macos')
+        id: apple-signing
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ] && [ -n "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" ] && [ -n "${{ secrets.KEYCHAIN_PASSWORD }}" ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+            echo "Apple signing secrets detected"
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "No Apple signing secrets — building unsigned"
+          fi
+
+      # ── macOS Code Signing (only when secrets are valid) ──
+      - name: Import Apple Developer Certificate
+        if: contains(matrix.platform, 'macos') && steps.apple-signing.outputs.available == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          CERT_SIZE=$(wc -c < certificate.p12 | tr -d ' ')
+          if [ "$CERT_SIZE" -lt 100 ]; then
+            echo "::warning::Certificate file too small ($CERT_SIZE bytes) — likely invalid. Skipping signing."
+            echo "SKIP_SIGNING=true" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign || {
+            echo "::warning::Certificate import failed — building unsigned"
+            echo "SKIP_SIGNING=true" >> $GITHUB_ENV
+            exit 0
+          }
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+          CERT_INFO=$(security find-identity -v -p codesigning build.keychain \
+            | grep "Developer ID Application" || true)
+          if [ -n "$CERT_INFO" ]; then
+            CERT_ID=$(echo "$CERT_INFO" | head -1 | awk -F'"' '{print $2}')
+            echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> $GITHUB_ENV
+            echo "Certificate imported: $CERT_ID"
+          else
+            echo "::warning::No Developer ID certificate found in keychain — building unsigned"
+            echo "SKIP_SIGNING=true" >> $GITHUB_ENV
+          fi
+
+      # ── Build with tauri-action ──
+      # Signed builds: only when Apple signing secrets are valid and imported
+      # Unsigned builds: fallback when no signing (Windows always uses this path)
+
+      # ── Build (signed) ──
+      - name: Build Tauri app (signed)
+        if: steps.apple-signing.outputs.available == 'true' && env.SKIP_SIGNING != 'true'
+        uses: tauri-apps/tauri-action@73fb865345c54760d875b94642314f8c0c894afa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_VARIANT: full
+          VITE_DESKTOP_RUNTIME: '1'
+          VITE_WS_API_URL: https://worldmonitor.app
+          # Client env parity (#5905): a key missing here silently disables the
+          # capability in every shipped build — checked by
+          # scripts/check-desktop-build-env.mjs (desktop-config CI job).
+          # Secret-sourced keys render empty until the repo secret exists.
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          VITE_ENABLE_CYBER_LAYER: 'true'
+          VITE_WS_RELAY_URL: ${{ secrets.VITE_WS_RELAY_URL }}
+          VITE_PMTILES_URL_PUBLIC: ${{ secrets.VITE_PMTILES_URL_PUBLIC }}
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'World Monitor v__VERSION__'
+          releaseBody: 'See changelog below.'
+          # Always upload into a DRAFT release (#5908). With fail-fast: false and
+          # five platforms, a non-draft first leg would make v__VERSION__ the
+          # live "latest" before the other platforms finish — clients would be
+          # offered an update whose asset for their OS does not exist yet.
+          # update-release-notes publishes it once every leg has succeeded.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          retryAttempts: 1
+
+      # ── Build (unsigned — no Apple certs) ──
+      - name: Build Tauri app (unsigned)
+        if: steps.apple-signing.outputs.available != 'true' || env.SKIP_SIGNING == 'true'
+        uses: tauri-apps/tauri-action@73fb865345c54760d875b94642314f8c0c894afa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_VARIANT: full
+          VITE_DESKTOP_RUNTIME: '1'
+          VITE_WS_API_URL: https://worldmonitor.app
+          # Client env parity (#5905): a key missing here silently disables the
+          # capability in every shipped build — checked by
+          # scripts/check-desktop-build-env.mjs (desktop-config CI job).
+          # Secret-sourced keys render empty until the repo secret exists.
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          VITE_ENABLE_CYBER_LAYER: 'true'
+          VITE_WS_RELAY_URL: ${{ secrets.VITE_WS_RELAY_URL }}
+          VITE_PMTILES_URL_PUBLIC: ${{ secrets.VITE_PMTILES_URL_PUBLIC }}
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'World Monitor v__VERSION__'
+          releaseBody: 'See changelog below.'
+          # Always upload into a DRAFT release (#5908). With fail-fast: false and
+          # five platforms, a non-draft first leg would make v__VERSION__ the
+          # live "latest" before the other platforms finish — clients would be
+          # offered an update whose asset for their OS does not exist yet.
+          # update-release-notes publishes it once every leg has succeeded.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          retryAttempts: 1
+      - name: Verify signed macOS bundle + embedded runtime
+        if: contains(matrix.platform, 'macos') && steps.apple-signing.outputs.available == 'true' && env.SKIP_SIGNING != 'true'
+        shell: bash
+        run: |
+          APP_PATH=$(find src-tauri/target -type d -path '*/bundle/macos/*.app' | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No macOS .app bundle found after build."
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          NODE_PATH=$(find "$APP_PATH/Contents/Resources" -type f -path '*/sidecar/node/node' | head -1)
+          if [ -z "$NODE_PATH" ]; then
+            echo "::error::Bundled Node runtime missing from app resources."
+            exit 1
+          fi
+          echo "Verified signed app bundle and embedded Node runtime: $NODE_PATH"
+
+      - name: Strip GPU libraries from AppImage
+        if: contains(matrix.platform, 'ubuntu')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --- Deterministic artifact selection ---
+          mapfile -t IMAGES < <(find src-tauri/target -path '*/bundle/appimage/*.AppImage')
+          if [ ${#IMAGES[@]} -eq 0 ]; then
+            echo "No AppImage found, skipping GPU lib strip"
+            exit 0
+          fi
+          if [ ${#IMAGES[@]} -gt 1 ]; then
+            echo "::error::Found ${#IMAGES[@]} AppImage files — expected exactly 1"
+            printf '  %s\n' "${IMAGES[@]}"
+            exit 1
+          fi
+          APPIMAGE="${IMAGES[0]}"
+          TOOL_ARCH=${{ matrix.label == 'Linux-ARM64' && 'aarch64' || 'x86_64' }}
+          bash scripts/repack-linux-appimage.sh "$APPIMAGE" "$TOOL_ARCH"
+
+          # --- Re-upload stripped AppImage to GitHub Release ---
+          # Single release line (#5908): this must stay the same tag the build
+          # legs publish (`v__VERSION__`) and the same one update-release-notes
+          # edits. The two halves of this workflow previously disagreed.
+          VERSION=$(node -p "require('./package.json').version")
+          TAG_NAME="v${VERSION}"
+          echo "Computed release tag: $TAG_NAME"
+          if gh release view "$TAG_NAME" &>/dev/null; then
+            echo "Re-uploading stripped AppImage to release $TAG_NAME"
+            gh release upload "$TAG_NAME" "$APPIMAGE" --clobber
+            echo "Replaced release asset: $(basename "$APPIMAGE")"
+          else
+            echo "::warning::Release $TAG_NAME not found — skipping re-upload"
+          fi
+
+      - name: Smoke-test AppImage (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          sudo apt-get install -y xvfb imagemagick
+          APPIMAGE=$(find src-tauri/target -path '*/bundle/appimage/*.AppImage' | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No AppImage found after build"
+            exit 1
+          fi
+          chmod +x "$APPIMAGE"
+          # Start Xvfb with known display number
+          Xvfb :99 -screen 0 1440x900x24 &
+          export DISPLAY=:99
+          sleep 2
+          # Launch AppImage under virtual framebuffer
+          "$APPIMAGE" --no-sandbox &
+          APP_PID=$!
+          # Wait for app to render
+          sleep 15
+          # Screenshot the virtual display
+          import -window root screenshot.png || true
+          # Verify app is still running (didn't crash)
+          if kill -0 $APP_PID 2>/dev/null; then
+            echo "✅ AppImage launched successfully"
+            kill $APP_PID || true
+          else
+            echo "❌ AppImage crashed during startup"
+            exit 1
+          fi
+
+      - name: Upload smoke test screenshot
+        if: contains(matrix.platform, 'ubuntu')
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: linux-smoke-test-screenshot-${{ matrix.label }}
+          path: screenshot.png
+          if-no-files-found: warn
+
+      - name: Cleanup Apple signing materials
+        if: always() && contains(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          rm -f certificate.p12
+          security delete-keychain build.keychain || true
+
+      - name: Report build duration
+        if: always()
+        shell: bash
+        run: |
+          if [ -z "${JOB_START_EPOCH:-}" ]; then
+            echo "::warning::JOB_START_EPOCH missing; duration unavailable."
+            exit 0
+          fi
+          END_EPOCH=$(date +%s)
+          ELAPSED=$((END_EPOCH - JOB_START_EPOCH))
+          MINUTES=$((ELAPSED / 60))
+          SECONDS=$((ELAPSED % 60))
+          echo "Build duration for ${{ matrix.label }}: ${MINUTES}m ${SECONDS}s"
+
+  # ── Notes + atomic publish, once every platform leg has succeeded ──
+  # `needs.build-tauri.result` is one value for the whole matrix, so this runs
+  # only when all five platforms succeeded. Every leg uploads into a DRAFT
+  # release; publishing happens here so `/releases/latest` never advertises a
+  # release that is missing a platform's asset (#5908).
+  update-release-notes:
+    needs: build-tauri
+    if: always() && contains(needs.build-tauri.result, 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate and update release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          TAG="v${VERSION}"
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS="Initial release"
+          else
+            COMMITS=$(git log "${PREV_TAG}..${TAG}" --oneline --no-merges | sed 's/^[a-f0-9]*//' | sed 's/^ /- /')
+          fi
+
+          BODY=$(cat <<NOTES
+          ## What's Changed
+
+          ${COMMITS}
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG:-initial}...${TAG}
+          NOTES
+          )
+
+          gh release edit "$TAG" --notes "$BODY"
+          echo "Updated release notes for $TAG"
+
+      - name: Publish the release
+        # The one place a desktop release goes live. Every advertised platform
+        # asset must exist first: `/api/download` maps each platform to exactly
+        # one suffix, so a missing asset is a 302 to the releases page for every
+        # user on that OS, and the updater would still have offered them the
+        # upgrade (#5908).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP_DRAFT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.draft }}
+          # A dispatch can run from any ref, and the tag is taken from
+          # package.json rather than the ref — so without this, dispatching from
+          # a feature branch would build that branch and publish it over the live
+          # binary. Only a release tag or the default branch may auto-publish;
+          # anywhere else still builds and still uploads, but stops at the draft.
+          PUBLISHABLE_REF: ${{ github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          TAG="v${VERSION}"
+
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "Assets on $TAG:"; printf '  %s\n' $ASSETS
+
+          # Keep only assets that carry the World Monitor identity, applying the
+          # same canonicalisation `/api/download` uses (lowercase, strip
+          # non-alphanumerics, require `worldmonitor`). Checking the platform
+          # suffix alone would let a stray branded artifact satisfy this gate for
+          # a platform the endpoint would then refuse to serve — the publisher
+          # and the endpoint have to mean the same thing by "an asset exists".
+          SERVABLE=$(printf '%s\n' "$ASSETS" | while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            canon=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')
+            # Prefix-strip test rather than `case`: older bash refuses to parse a
+            # `case` nested inside this command substitution.
+            if [ "${canon#*worldmonitor}" != "$canon" ]; then
+              printf '%s\n' "$name"
+            fi
+          done)
+          echo "Servable (World Monitor identity) assets:"; printf '  %s\n' $SERVABLE
+
+          MISSING=""
+          # Mirrors PLATFORM_PATTERNS in api/download.js — every platform the
+          # download endpoint and README advertise. Kept in lockstep by
+          # tests/desktop-one-binary-model.test.mjs, which parses both lists.
+          for suffix in '_x64-setup\.exe$' '_x64_en-US\.msi$' '_aarch64\.dmg$' '_x64\.dmg$' '_amd64\.AppImage$' '_aarch64\.AppImage$'; do
+            printf '%s\n' "$SERVABLE" | grep -qE "$suffix" || MISSING="$MISSING $suffix"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Refusing to publish $TAG — no asset matches:$MISSING. The release stays a draft; investigate the failed platform before publishing."
+            exit 1
+          fi
+
+          if [ "$KEEP_DRAFT" = "true" ]; then
+            echo "::notice::$TAG left as a draft by request. It is NOT served by /api/version or /api/download until published."
+            exit 0
+          fi
+
+          if [ "$PUBLISHABLE_REF" != "true" ]; then
+            echo "::warning::$TAG left as a draft: ${GITHUB_REF_NAME} is neither a release tag nor the default branch, and auto-publishing from an arbitrary ref would overwrite the live binary. Publish it by hand if this build is genuinely the release."
+            exit 0
+          fi
+
+          gh release edit "$TAG" --draft=false
+          echo "Published $TAG"

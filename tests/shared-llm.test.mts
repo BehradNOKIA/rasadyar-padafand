@@ -1,0 +1,906 @@
+import assert from 'node:assert/strict';
+import { afterEach, describe, it } from 'node:test';
+
+import { callLlm, callLlmReasoning, callLlmReasoningStream, getLlmAttemptTimeoutMs } from '../server/_shared/llm.ts';
+import { __testing__ as llmHealth, isModelUsable } from '../server/_shared/llm-health.ts';
+
+const originalFetch = globalThis.fetch;
+const originalAbortSignalTimeout = AbortSignal.timeout;
+const originalDateNow = Date.now;
+const originalGroqApiKey = process.env.GROQ_API_KEY;
+const originalOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
+const originalOllamaApiUrl = process.env.OLLAMA_API_URL;
+const originalLlmApiUrl = process.env.LLM_API_URL;
+const originalLlmApiKey = process.env.LLM_API_KEY;
+const originalLlmReasoningProvider = process.env.LLM_REASONING_PROVIDER;
+const originalLlmReasoningModel = process.env.LLM_REASONING_MODEL;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  AbortSignal.timeout = originalAbortSignalTimeout;
+  Date.now = originalDateNow;
+  // The health gate's caches are module-level and outlive a single test.
+  llmHealth.reset();
+
+  if (originalLlmReasoningProvider === undefined) delete process.env.LLM_REASONING_PROVIDER;
+  else process.env.LLM_REASONING_PROVIDER = originalLlmReasoningProvider;
+
+  if (originalLlmReasoningModel === undefined) delete process.env.LLM_REASONING_MODEL;
+  else process.env.LLM_REASONING_MODEL = originalLlmReasoningModel;
+
+  if (originalGroqApiKey === undefined) delete process.env.GROQ_API_KEY;
+  else process.env.GROQ_API_KEY = originalGroqApiKey;
+
+  if (originalOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+  else process.env.OPENROUTER_API_KEY = originalOpenRouterApiKey;
+
+  if (originalOllamaApiUrl === undefined) delete process.env.OLLAMA_API_URL;
+  else process.env.OLLAMA_API_URL = originalOllamaApiUrl;
+
+  if (originalLlmApiUrl === undefined) delete process.env.LLM_API_URL;
+  else process.env.LLM_API_URL = originalLlmApiUrl;
+
+  if (originalLlmApiKey === undefined) delete process.env.LLM_API_KEY;
+  else process.env.LLM_API_KEY = originalLlmApiKey;
+});
+
+describe('callLlm', () => {
+  it('fails stalled DeepSeek V4 Flash calls over to the next provider after 15s', () => {
+    assert.equal(getLlmAttemptTimeoutMs('deepseek/deepseek-v4-flash', 25_000), 15_000);
+    assert.equal(getLlmAttemptTimeoutMs('deepseek/deepseek-v4-flash', 8_000), 8_000);
+    assert.equal(getLlmAttemptTimeoutMs('deepseek/deepseek-v4-pro', 25_000), 25_000);
+    assert.equal(getLlmAttemptTimeoutMs('google/gemini-2.5-flash', 25_000), 25_000);
+  });
+
+  it('wires the DeepSeek Flash deadline into the shared chat-completion request', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const timeoutBySignal = new Map<AbortSignal, number>();
+    const postTimeouts: number[] = [];
+    AbortSignal.timeout = ((delay: number) => {
+      const signal = new AbortController().signal;
+      timeoutBySignal.set(signal, delay);
+      return signal;
+    }) as typeof AbortSignal.timeout;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      postTimeouts.push(timeoutBySignal.get(init?.signal as AbortSignal) ?? -1);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'bounded response' } }],
+        usage: { total_tokens: 5 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({ messages: [{ role: 'user', content: 'x' }] });
+
+    assert.equal(result?.provider, 'openrouter');
+    assert.deepEqual(postTimeouts, [15_000]);
+  });
+
+  it('excludes China-hosted providers and sorts by throughput on every OpenRouter call', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      bodies.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: { total_tokens: 5 } }), { status: 200 });
+    }) as typeof fetch;
+
+    // Utility (reasoning off) AND reasoning-on must both carry the exclusion.
+    await callLlm({ messages: [{ role: 'user', content: 'x' }] });
+    await callLlm({ messages: [{ role: 'user', content: 'y' }], enableReasoning: true });
+
+    for (const b of bodies) {
+      const prov = b.provider as { ignore?: string[]; sort?: string } | undefined;
+      assert.ok(prov, 'every OpenRouter body must carry provider routing');
+      assert.equal(prov.sort, 'throughput');
+      // Lowercase OpenRouter provider SLUGS (verified via GET /providers) —
+      // display-name casing is silently ignored by OpenRouter (#4993 review).
+      for (const cn of ['baidu', 'alibaba', 'deepseek', 'siliconflow', 'streamlake', 'novita']) {
+        assert.ok(prov.ignore?.includes(cn), `China provider slug ${cn} must be excluded`);
+        assert.equal(cn, cn.toLowerCase(), 'slug must be lowercase to match OpenRouter');
+      }
+    }
+    // reasoning-off body still disables reasoning; reasoning-on omits it.
+    assert.deepEqual(bodies[0]?.reasoning, { enabled: false });
+    assert.equal('reasoning' in (bodies[1] ?? {}), false);
+  });
+
+  it('preserves the default provider order (openrouter-first since #4944)', async () => {
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const postUrls: string[] = [];
+    const postBodies: Array<Record<string, unknown>> = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+
+      postUrls.push(url);
+      postBodies.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+      if (url.includes('api.groq.com')) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'groq response' } }],
+          usage: { total_tokens: 42 },
+        }), { status: 200 });
+      }
+
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'openrouter response' } }],
+        usage: { total_tokens: 99 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Summarize the setup.' }],
+    });
+
+    assert.ok(result);
+    assert.equal(result.provider, 'openrouter');
+    assert.equal(result.model, 'deepseek/deepseek-v4-flash');
+    assert.equal(result.finishReason, null, 'providers that omit finish_reason normalize to null');
+    assert.deepEqual(postUrls.filter(url => url.includes('/chat/completions')), [
+      'https://openrouter.ai/api/v1/chat/completions',
+    ]);
+    // Utility calls must not pay reasoning tokens on hybrid-reasoning models.
+    assert.deepEqual(postBodies[0]?.reasoning, { enabled: false });
+  });
+
+  it('preserves the provider finish reason on non-streaming completions', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      return new Response(JSON.stringify({
+        choices: [{
+          message: { content: 'The response reached its configured token limit.' },
+          finish_reason: 'length',
+        }],
+        usage: { total_tokens: 12 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Return a bounded response.' }],
+    });
+
+    assert.ok(result);
+    assert.equal(result.finishReason, 'length');
+  });
+
+  it('retries the provider chain on token-limited completions only when opted in', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const postUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      postUrls.push(url);
+      if (url.includes('openrouter.ai')) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'Clipped before completing the thought' }, finish_reason: 'length' }],
+          usage: { total_tokens: 80, completion_tokens: 40 },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Complete fallback response.' }, finish_reason: 'stop' }],
+        usage: { total_tokens: 35, completion_tokens: 12 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Return a bounded response.' }],
+      maxTokens: 40,
+      providerOrder: ['openrouter', 'groq'],
+      retryOnLengthLimit: true,
+    });
+
+    assert.ok(result);
+    assert.equal(result.provider, 'groq');
+    assert.equal(result.content, 'Complete fallback response.');
+    assert.deepEqual(postUrls, [
+      'https://openrouter.ai/api/v1/chat/completions',
+      'https://api.groq.com/openai/v1/chat/completions',
+    ]);
+  });
+
+  it('rejects token-limit aliases and missing or unknown reasons at the requested ceiling', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const cases: Array<{ finishReason?: string | null; completionTokens: number }> = [
+      { finishReason: 'max_tokens', completionTokens: 10 },
+      { finishReason: 'MAX_TOKENS', completionTokens: 10 },
+      { finishReason: 'max_output_tokens', completionTokens: 10 },
+      { finishReason: null, completionTokens: 20 },
+      { finishReason: 'provider_specific_limit', completionTokens: 20 },
+    ];
+
+    for (const { finishReason, completionTokens } of cases) {
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+        return new Response(JSON.stringify({
+          choices: [{
+            message: { content: 'Potentially clipped response.' },
+            ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
+          }],
+          usage: { total_tokens: 30, completion_tokens: completionTokens },
+        }), { status: 200 });
+      }) as typeof fetch;
+
+      const result = await callLlm({
+        messages: [{ role: 'user', content: 'Return a bounded response.' }],
+        provider: 'openrouter',
+        maxTokens: 20,
+        retryOnLengthLimit: true,
+      });
+      assert.equal(result, null, `must reject finish_reason=${String(finishReason)} at ${completionTokens} tokens`);
+    }
+  });
+
+  it('omits the reasoning-off body when the reasoning profile opts in', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const postBodies: Array<Record<string, unknown>> = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      postBodies.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'reasoning-tier response' } }],
+        usage: { total_tokens: 7 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Reason about the setup.' }],
+      enableReasoning: true,
+    });
+
+    assert.ok(result);
+    assert.equal(result.provider, 'openrouter');
+    assert.equal(postBodies.length, 1);
+    // Opt-in leaves the model's own reasoning default in effect.
+    assert.equal('reasoning' in (postBodies[0] ?? {}), false);
+  });
+
+  it('callLlmReasoning honors enableReasoning:false to disable reasoning on the reasoning-tier model (#4983)', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.LLM_REASONING_PROVIDER = 'openrouter';
+    process.env.LLM_REASONING_MODEL = 'deepseek/deepseek-v4-pro';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      bodies.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Closure would choke a fifth of seaborne crude.' } }],
+        usage: { total_tokens: 30 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    // Short-stage caller opts OUT of reasoning: the tiny max_tokens budget
+    // must go to the answer, not hidden reasoning tokens (the #4983 bug).
+    const off = await callLlmReasoning({
+      messages: [{ role: 'user', content: 'Why does this matter?' }],
+      maxTokens: 260,
+      enableReasoning: false,
+    });
+    assert.ok(off);
+    assert.equal(off.model, 'deepseek/deepseek-v4-pro', 'still uses the reasoning-tier model');
+    assert.deepEqual(bodies[0]?.reasoning, { enabled: false }, 'reasoning must be disabled on the wire');
+
+    // Default (no override) keeps reasoning on for genuinely analytical stages.
+    bodies.length = 0;
+    const on = await callLlmReasoning({
+      messages: [{ role: 'user', content: 'Deduce the situation.' }],
+      maxTokens: 1500,
+    });
+    assert.ok(on);
+    assert.equal('reasoning' in (bodies[0] ?? {}), false, 'default leaves reasoning on (no disable body)');
+    // LLM_REASONING_* are restored by the shared afterEach (snapshot-based),
+    // which runs even if an assertion above throws — no manual cleanup here.
+  });
+
+  it('ignores DeepSeek reasoning message fields and serves content untouched', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      // Live-captured DeepSeek V4 shape (2026-07-06): reasoning arrives as
+      // separate message fields, never inline tags; content stays clean.
+      return new Response(JSON.stringify({
+        choices: [{ message: {
+          role: 'assistant',
+          content: 'Paris',
+          reasoning: 'We need to reply with exactly one word.',
+          reasoning_details: [{ type: 'reasoning.text', text: 'We need to reply.' }],
+        } }],
+        usage: { total_tokens: 30, prompt_tokens: 14, completion_tokens: 16 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Capital of France, one word.' }],
+      enableReasoning: true,
+    });
+
+    assert.ok(result);
+    assert.equal(result.content, 'Paris');
+  });
+
+  it('falls through to the fixed OpenRouter free model when the paid model returns only reasoning', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const attemptedModels: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      if (url.includes('openrouter.ai')) {
+        const body = JSON.parse(String(init?.body || '{}')) as { model?: string; reasoning?: unknown };
+        attemptedModels.push(body.model || '');
+        if (body.model === 'google/gemma-4-26b-a4b-it:free') {
+          assert.deepEqual(body.reasoning, { enabled: false });
+          return new Response(JSON.stringify({
+            choices: [{ message: { content: 'OpenRouter free fallback answer' } }],
+            usage: { total_tokens: 20 },
+          }), { status: 200 });
+        }
+        // Degenerate case: paid model burned its budget on reasoning, empty content.
+        return new Response(JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: '', reasoning: 'endless deliberation…' } }],
+          usage: { total_tokens: 60, prompt_tokens: 14, completion_tokens: 46 },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'groq fallback answer' } }],
+        usage: { total_tokens: 20 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Answer briefly.' }],
+    });
+
+    assert.ok(result);
+    assert.equal(result.provider, 'openrouter-free');
+    assert.equal(result.model, 'google/gemma-4-26b-a4b-it:free');
+    assert.equal(result.content, 'OpenRouter free fallback answer');
+    assert.deepEqual(attemptedModels, [
+      'deepseek/deepseek-v4-flash',
+      'google/gemma-4-26b-a4b-it:free',
+    ]);
+  });
+
+  it('accepts the fixed OpenRouter backup after the paid and primary models return empty content', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (!url.includes('openrouter.ai')) {
+        throw new Error('Groq must not be reached when the backup free model succeeds');
+      }
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      bodies.push(body);
+      const content = body.model === 'openai/gpt-oss-20b:free' ? 'backup answer' : '';
+      return new Response(JSON.stringify({
+        choices: [{ message: { content } }],
+        usage: { total_tokens: 5 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({ messages: [{ role: 'user', content: 'Answer briefly.' }] });
+
+    assert.equal(result?.provider, 'openrouter-free-backup');
+    assert.equal(result?.model, 'openai/gpt-oss-20b:free');
+    assert.deepEqual(bodies.map(body => body.model), [
+      'deepseek/deepseek-v4-flash',
+      'google/gemma-4-26b-a4b-it:free',
+      'openai/gpt-oss-20b:free',
+    ]);
+    for (const body of bodies) {
+      assert.deepEqual(body.reasoning, { enabled: false });
+      assert.ok(body.provider, 'every OpenRouter fallback must carry provider routing');
+    }
+  });
+
+  it('bounds a stalled free model and preserves the independent Groq fallback budget', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    let now = 1_000;
+    Date.now = () => now;
+    const timeoutBySignal = new Map<AbortSignal, number>();
+    AbortSignal.timeout = ((delay: number) => {
+      const signal = new AbortController().signal;
+      timeoutBySignal.set(signal, delay);
+      return signal;
+    }) as typeof AbortSignal.timeout;
+
+    const attempted: Array<{ model: string; timeout: number }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const body = JSON.parse(String(init?.body || '{}')) as { model?: string };
+      const timeout = timeoutBySignal.get(init?.signal as AbortSignal) ?? -1;
+      attempted.push({ model: body.model || '', timeout });
+
+      if (body.model === 'deepseek/deepseek-v4-flash') {
+        return new Response('paid unavailable', { status: 503 });
+      }
+      if (body.model === 'google/gemma-4-26b-a4b-it:free') {
+        now += timeout;
+        throw Object.assign(new Error('free model timed out'), { name: 'TimeoutError' });
+      }
+      if (url.includes('api.groq.com')) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'Groq answer' } }],
+          usage: { total_tokens: 5 },
+        }), { status: 200 });
+      }
+      throw new Error(`unexpected attempt: ${body.model}`);
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Answer briefly.' }],
+      timeoutMs: 22_000,
+    });
+
+    assert.equal(result?.provider, 'groq');
+    assert.deepEqual(attempted, [
+      { model: 'deepseek/deepseek-v4-flash', timeout: 15_000 },
+      { model: 'google/gemma-4-26b-a4b-it:free', timeout: 8_000 },
+      { model: 'openai/gpt-oss-20b', timeout: 14_000 },
+    ]);
+  });
+
+  it('supports explicitly bypassing groq with a stronger model override', async () => {
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const postBodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      postBodies.push({ url, body });
+
+      if (url.includes('api.groq.com')) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'groq response' } }],
+          usage: { total_tokens: 12 },
+        }), { status: 200 });
+      }
+
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'openrouter response' } }],
+        usage: { total_tokens: 64 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Use the better model.' }],
+      providerOrder: ['openrouter'],
+      modelOverrides: {
+        openrouter: 'google/gemini-2.5-pro',
+      },
+    });
+
+    assert.ok(result);
+    assert.equal(result.provider, 'openrouter');
+    assert.equal(result.model, 'google/gemini-2.5-pro');
+    assert.equal(postBodies.length, 1);
+    assert.equal(postBodies[0]?.url, 'https://openrouter.ai/api/v1/chat/completions');
+    assert.equal(postBodies[0]?.body.model, 'google/gemini-2.5-pro');
+    assert.deepEqual(postBodies[0]?.body.reasoning, { enabled: false });
+  });
+
+  it('logs a bounded error-body slice on non-stream provider failure', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warns.push(args.map(String).join(' ')); };
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      if (url.includes('openrouter.ai')) {
+        return new Response(JSON.stringify({ error: { message: 'This model is not available in your region' } }), { status: 403 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'groq fallback' } }],
+        usage: { total_tokens: 5 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const result = await callLlm({ messages: [{ role: 'user', content: 'hi' }] });
+      assert.ok(result);
+      assert.equal(result.provider, 'groq');
+      const errLine = warns.find((w) => w.includes('HTTP 403'));
+      assert.ok(errLine, 'a 403 warn line must be emitted');
+      assert.ok(errLine.includes('not available in your region'), 'the error body must be visible in the log');
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it('reads at most the cap from an oversized/never-ending error body before falling back', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warns.push(args.map(String).join(' ')); };
+
+    let cancelledCount = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+      if (url.includes('openrouter.ai')) {
+        // First chunk exceeds the cap; a second read would hang forever.
+        // The bounded reader must stop after chunk one and cancel — if it
+        // tried to consume the full body (resp.text()), this test hangs.
+        const enc = new TextEncoder();
+        let emitted = false;
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (!emitted) {
+              emitted = true;
+              controller.enqueue(enc.encode(`REGION_BLOCK ${'x'.repeat(4000)}`));
+            }
+            // Never close: subsequent pulls stall until cancel.
+            return new Promise(() => { /* hang */ });
+          },
+          cancel() { cancelledCount += 1; },
+        });
+        return new Response(body, { status: 403 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'groq fallback' } }],
+        usage: { total_tokens: 5 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const result = await callLlm({ messages: [{ role: 'user', content: 'hi' }] });
+      assert.ok(result, 'fallback must complete despite the never-ending error body');
+      assert.equal(result.provider, 'groq');
+      const errLine = warns.find((w) => w.includes('HTTP 403'));
+      assert.ok(errLine, 'a 403 warn line must be emitted');
+      assert.ok(errLine.includes('REGION_BLOCK'), 'the leading body slice must be visible');
+      const bodyPart = errLine.slice(errLine.indexOf('body=') + 5);
+      assert.ok(bodyPart.length <= 300, `logged body must be capped at 300 chars, got ${bodyPart.length}`);
+      assert.equal(cancelledCount, 3, 'each OpenRouter error-body stream must be cancelled after the bounded read');
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it('falls back within an explicit provider order when the upper model fails', async () => {
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const postUrls: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+
+      postUrls.push(url);
+      if (url.includes('openrouter.ai')) {
+        return new Response('upstream error', { status: 503 });
+      }
+
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'groq fallback response' } }],
+        usage: { total_tokens: 21 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await callLlm({
+      messages: [{ role: 'user', content: 'Try the stronger model first.' }],
+      providerOrder: ['openrouter', 'groq'],
+      modelOverrides: {
+        openrouter: 'google/gemini-2.5-pro',
+      },
+    });
+
+    assert.ok(result);
+    assert.equal(result.provider, 'groq');
+    assert.equal(result.model, 'openai/gpt-oss-20b');
+    assert.deepEqual(postUrls.filter(url => url.includes('/chat/completions')), [
+      'https://openrouter.ai/api/v1/chat/completions',
+      'https://api.groq.com/openai/v1/chat/completions',
+    ]);
+  });
+
+  it('stops re-sending the prompt to a model the provider rejects as unknown', async () => {
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const attemptedModels: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      // The origin probe answers 200 — reachability was never the problem.
+      if ((init?.method || 'GET') === 'GET') {
+        return new Response('', { status: 200 });
+      }
+
+      if (url.includes('openrouter.ai')) {
+        const model = String((JSON.parse(String(init?.body || '{}')) as Record<string, unknown>).model || '');
+        attemptedModels.push(model);
+        if (model !== 'ghost/ghost-model-v9') {
+          return new Response(JSON.stringify({
+            choices: [{ message: { content: 'free fallback response' } }],
+            usage: { total_tokens: 7 },
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          error: { message: 'ghost/ghost-model-v9 is not a valid model ID', code: 400 },
+        }), { status: 400 });
+      }
+
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'groq fallback response' } }],
+        usage: { total_tokens: 7 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const result = await callLlm({
+        messages: [{ role: 'user', content: `attempt ${attempt}` }],
+        modelOverrides: { openrouter: 'ghost/ghost-model-v9' },
+      });
+      assert.equal(result?.provider, 'openrouter-free', 'the fixed free fallback must keep serving every call');
+    }
+
+    const rejectedModelPosts = attemptedModels.filter(model => model === 'ghost/ghost-model-v9');
+    assert.equal(
+      rejectedModelPosts.length,
+      2,
+      `a model the provider rejects must stop being re-sent once quarantined, got ${rejectedModelPosts.length} attempts across 4 calls`,
+    );
+  });
+
+  it('clears a prior model rejection as soon as the provider accepts the model', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const model = 'ghost/ghost-model-v9';
+    let postCount = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      postCount += 1;
+      if (postCount === 2) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'provider accepted this model' } }],
+          usage: { total_tokens: 5 },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        error: { message: `${model} is not a valid model ID` },
+      }), { status: 400 });
+    }) as typeof fetch;
+
+    const common = {
+      messages: [{ role: 'user', content: 'test' }],
+      provider: 'openrouter',
+      modelOverrides: { openrouter: model },
+    } as const;
+
+    assert.equal(await callLlm(common), null);
+    assert.equal(
+      await callLlm({ ...common, validate: () => false }),
+      null,
+      'application validation still rejects the payload',
+    );
+    assert.equal(await callLlm(common), null);
+
+    assert.equal(
+      isModelUsable('https://openrouter.ai/api/v1/chat/completions', model),
+      true,
+      'HTTP 200 proves the provider accepts the model and must reset the rejection streak',
+    );
+  });
+
+  it('quarantines a rejected reasoning-stream model while its fallback keeps streaming', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.GROQ_API_KEY = 'groq-test-key';
+    process.env.LLM_REASONING_PROVIDER = 'openrouter';
+    process.env.LLM_REASONING_MODEL = 'ghost/ghost-model-v9';
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    const attemptedModels: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+
+      if (url.includes('openrouter.ai')) {
+        const model = String((JSON.parse(String(init?.body || '{}')) as Record<string, unknown>).model || '');
+        attemptedModels.push(model);
+        if (model !== 'ghost/ghost-model-v9') {
+          const body = [
+            'data: {"choices":[{"delta":{"content":"free fallback"}}]}',
+            '',
+            'data: [DONE]',
+            '',
+          ].join('\n');
+          return new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
+        return new Response(JSON.stringify({
+          error: { message: 'ghost/ghost-model-v9 is not a valid model ID' },
+        }), { status: 400 });
+      }
+
+      const body = [
+        'data: {"choices":[{"delta":{"content":"groq fallback"}}]}',
+        '',
+        'data: [DONE]',
+        '',
+      ].join('\n');
+      return new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }) as typeof fetch;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const output = await new Response(callLlmReasoningStream({
+        messages: [{ role: 'user', content: `attempt ${attempt}` }],
+      })).text();
+      assert.match(output, /free fallback/);
+      assert.match(output, /"done":true/);
+    }
+
+    assert.equal(
+      attemptedModels.filter(model => model === 'ghost/ghost-model-v9').length,
+      2,
+      'the quarantined stream model must be skipped before another completion request',
+    );
+    assert.equal(
+      attemptedModels.filter(model => model === 'google/gemma-4-26b-a4b-it:free').length,
+      4,
+      'the fixed free fallback must continue serving every stream',
+    );
+  });
+
+  it('clears a stream model rejection on HTTP success even when the stream is empty', async () => {
+    process.env.OPENROUTER_API_KEY = 'or-test-key';
+    process.env.LLM_REASONING_PROVIDER = 'openrouter';
+    process.env.LLM_REASONING_MODEL = 'ghost/ghost-model-v9';
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OLLAMA_API_URL;
+    delete process.env.LLM_API_URL;
+    delete process.env.LLM_API_KEY;
+
+    let postCount = 0;
+    let ghostAttempts = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method || 'GET') === 'GET') return new Response('', { status: 200 });
+      postCount += 1;
+      const model = String((JSON.parse(String(init?.body || '{}')) as Record<string, unknown>).model || '');
+      if (model === 'ghost/ghost-model-v9') ghostAttempts += 1;
+      if (model === 'ghost/ghost-model-v9' && ghostAttempts === 2) {
+        return new Response('data: [DONE]\n\n', {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      return new Response(JSON.stringify({
+        error: { message: 'ghost/ghost-model-v9 is not a valid model ID' },
+      }), { status: 400 });
+    }) as typeof fetch;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await new Response(callLlmReasoningStream({
+        messages: [{ role: 'user', content: `attempt ${attempt}` }],
+      })).text();
+    }
+
+    assert.equal(postCount, 9);
+    assert.equal(ghostAttempts, 3);
+    assert.equal(
+      isModelUsable('https://openrouter.ai/api/v1/chat/completions', 'ghost/ghost-model-v9'),
+      true,
+      'the accepted empty stream resets the streak before the next rejection',
+    );
+  });
+});

@@ -1,0 +1,111 @@
+import { Panel } from './Panel';
+import { t } from '@/services/i18n';
+import { hasPremiumAccess } from '@/services/panel-gating';
+import { FrameworkSelector } from './FrameworkSelector';
+import type { DailyMarketBrief } from '@/services/daily-market-brief';
+import { describeFreshness } from '@/services/persistent-cache';
+import { escapeHtml, unsafeRawHtml } from '@/utils/sanitize';
+import { getChangeClass } from '@/utils';
+import { createWatchlistButton } from './watchlist-modal';
+import { formatIranDateTime } from '@/utils/persian-datetime';
+
+type BriefSource = 'live' | 'cached';
+
+function formatGeneratedTime(isoTimestamp: string, _timezone: string): string {
+  try {
+    return formatIranDateTime(isoTimestamp);
+  } catch {
+    return isoTimestamp;
+  }
+}
+
+function stanceLabel(stance: DailyMarketBrief['items'][number]['stance']): string {
+  if (stance === 'bullish') return 'صعودی';
+  if (stance === 'defensive') return 'دفاعی';
+  return 'خنثی';
+}
+
+function formatPrice(price: number | null): string {
+  if (typeof price !== 'number' || !Number.isFinite(price)) return 'ناموجود';
+  return price.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function formatChange(change: number | null): string {
+  if (typeof change !== 'number' || !Number.isFinite(change)) return 'بدون تغییر';
+  const sign = change > 0 ? '+' : '';
+  return `${sign}${change.toFixed(2)}%`;
+}
+
+export class DailyMarketBriefPanel extends Panel {
+  private fwSelector: FrameworkSelector;
+
+  constructor() {
+    super({ id: 'daily-market-brief', title: 'گزارش روزانه بازار', infoTooltip: t('components.dailyMarketBrief.infoTooltip'), premium: 'locked' });
+    this.fwSelector = new FrameworkSelector({ panelId: 'daily-market-brief', isPremium: hasPremiumAccess(), panel: this, note: 'فقط برای تحلیل تولیدشده در سمت کاربر اعمال می‌شود' });
+    this.header.appendChild(this.fwSelector.el);
+    this.header.appendChild(createWatchlistButton('ویرایش فهرست پیگیری'));
+  }
+
+  public override destroy(): void {
+    this.fwSelector.destroy();
+    super.destroy();
+  }
+
+  public renderBrief(brief: DailyMarketBrief, source: BriefSource = 'live'): void {
+    const freshness = describeFreshness(new Date(brief.generatedAt).getTime());
+    this.setDataBadge(source, freshness);
+    this.resetRetryBackoff();
+
+    const html = `
+      <div class="daily-brief-shell" style="display:grid;gap:12px">
+        <div class="daily-brief-card" style="display:grid;gap:6px;padding:12px;border:1px solid var(--border);border-radius:4px;background:rgba(255,255,255,0.03)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div style="font-size:calc(13px * var(--wm-panel-effective-scale, 1));font-weight:600">${escapeHtml(brief.title)}</div>
+            <div style="font-size:calc(11px * var(--wm-panel-effective-scale, 1));color:var(--text-dim)">${escapeHtml(formatGeneratedTime(brief.generatedAt, brief.timezone))}</div>
+          </div>
+          <div style="font-size:calc(12px * var(--wm-panel-effective-scale, 1));line-height:1.5;color:var(--text)">${escapeHtml(brief.summary)}</div>
+        </div>
+
+        <div style="display:grid;gap:10px">
+          <div style="padding:10px 12px;border:1px solid var(--border);border-radius:4px;background:rgba(255,255,255,0.02)">
+            <div style="font-size:calc(11px * var(--wm-panel-effective-scale, 1));letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px">برنامه اقدام</div>
+            <div style="font-size:calc(12px * var(--wm-panel-effective-scale, 1));line-height:1.5">${escapeHtml(brief.actionPlan)}</div>
+          </div>
+          <div style="padding:10px 12px;border:1px solid var(--border);border-radius:4px;background:rgba(255,255,255,0.02)">
+            <div style="font-size:calc(11px * var(--wm-panel-effective-scale, 1));letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px">پایش ریسک</div>
+            <div style="font-size:calc(12px * var(--wm-panel-effective-scale, 1));line-height:1.5">${escapeHtml(brief.riskWatch)}</div>
+          </div>
+        </div>
+
+        <div style="display:grid;gap:8px">
+          ${brief.items.map((item) => `
+            <div style="display:grid;gap:6px;padding:10px 12px;border:1px solid var(--border);border-radius:4px;background:rgba(255,255,255,0.02)">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                <div>
+                  <div style="font-size:calc(12px * var(--wm-panel-effective-scale, 1));font-weight:600">${escapeHtml(item.name)}</div>
+                  <div style="font-size:calc(11px * var(--wm-panel-effective-scale, 1));color:var(--text-dim)">${escapeHtml(item.display)}</div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-size:calc(12px * var(--wm-panel-effective-scale, 1));font-weight:600">${escapeHtml(formatPrice(item.price))}</div>
+                  <div class="market-change ${getChangeClass(item.change ?? 0)}" style="font-size:calc(11px * var(--wm-panel-effective-scale, 1))">${escapeHtml(formatChange(item.change))}</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                <div style="font-size:calc(11px * var(--wm-panel-effective-scale, 1));letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)">${escapeHtml(stanceLabel(item.stance))}</div>
+                ${item.relatedHeadline ? `<div style="font-size:calc(11px * var(--wm-panel-effective-scale, 1));color:var(--text-dim);text-align:right;max-width:55%">تیتر مرتبط</div>` : ''}
+              </div>
+              <div style="font-size:calc(12px * var(--wm-panel-effective-scale, 1));line-height:1.45">${escapeHtml(item.note)}</div>
+            </div>
+          `).join('')}
+        </div>
+
+      </div>
+    `;
+
+    this.setSafeContent(unsafeRawHtml(html, 'legacy Panel.setContent() migration'));
+  }
+
+  public showUnavailable(message = 'برای تولید گزارش روزانه، داده زنده بازار لازم است.'): void {
+    this.showError(message);
+  }
+}

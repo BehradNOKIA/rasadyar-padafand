@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package worldmonitor.market.v1;
+
+import "buf/validate/validate.proto";
+
+// MarketQuote represents a stock or index quote from Finnhub or Yahoo Finance.
+message MarketQuote {
+  // Ticker symbol (e.g., "AAPL", "^GSPC").
+  string symbol = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  // Human-readable name.
+  string name = 2;
+  // Display label.
+  string display = 3;
+  // Current price.
+  double price = 4;
+  // Percentage change from previous close.
+  double change = 5;
+  // Sparkline data points (recent price history).
+  repeated double sparkline = 6;
+}
+
+// MarketQuoteUnavailableReason explains why a requested symbol produced no quote.
+//
+// Requested symbols are resolved seed-first: the fixed Railway seed snapshot
+// answers without any upstream call, and only the remaining symbols are looked
+// up through the bounded, Redis-cached quote provider. Every symbol that
+// survives normalization is accounted for by either a quote or one of these
+// reasons — a requested symbol is never silently dropped.
+enum MarketQuoteUnavailableReason {
+  // Unspecified reason.
+  MARKET_QUOTE_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  // The symbol is absent from the seed snapshot and the provider has no quote for it.
+  MARKET_QUOTE_UNAVAILABLE_REASON_NOT_FOUND = 1;
+  // The provider lookup failed. Transient, and deliberately not cached.
+  MARKET_QUOTE_UNAVAILABLE_REASON_PROVIDER_ERROR = 2;
+  // The provider rate-limited the lookup.
+  MARKET_QUOTE_UNAVAILABLE_REASON_PROVIDER_RATE_LIMITED = 3;
+  // No credentials are configured for the quote provider, so the gap was not filled.
+  MARKET_QUOTE_UNAVAILABLE_REASON_PROVIDER_NOT_CONFIGURED = 4;
+  // Dropped by the per-request symbol cardinality bound before any lookup.
+  MARKET_QUOTE_UNAVAILABLE_REASON_REQUEST_LIMIT_EXCEEDED = 5;
+  // A seed miss the request's bounded upstream budget (count or deadline) could not cover.
+  MARKET_QUOTE_UNAVAILABLE_REASON_UPSTREAM_BUDGET_EXHAUSTED = 6;
+  // The seed snapshot could not be read, so no symbol was resolved and no upstream was contacted.
+  MARKET_QUOTE_UNAVAILABLE_REASON_SEED_UNAVAILABLE = 7;
+}
+
+// MarketQuoteUnavailable reports a requested symbol that produced no quote.
+message MarketQuoteUnavailable {
+  // The requested ticker symbol, normalized.
+  string symbol = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  // Why the symbol produced no quote.
+  MarketQuoteUnavailableReason reason = 2;
+}
+
+// CryptoQuote represents a cryptocurrency quote from CoinGecko.
+message CryptoQuote {
+  // Cryptocurrency name (e.g., "Bitcoin").
+  string name = 1;
+  // Ticker symbol (e.g., "BTC").
+  string symbol = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  // Current price in USD.
+  double price = 3;
+  // 24-hour percentage change.
+  double change = 4;
+  // Sparkline data points (recent price history).
+  repeated double sparkline = 5;
+  // 7-day percentage change.
+  double change7d = 6;
+}
+
+// CommodityQuote represents a commodity price quote from Yahoo Finance.
+message CommodityQuote {
+  // Commodity symbol (e.g., "CL=F" for crude oil).
+  string symbol = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  // Human-readable name.
+  string name = 2;
+  // Display label.
+  string display = 3;
+  // Current price.
+  double price = 4;
+  // Percentage change from previous close.
+  double change = 5;
+  // Sparkline data points.
+  repeated double sparkline = 6;
+}
+
+// SectorPerformance represents performance data for a market sector.
+message SectorPerformance {
+  // Sector symbol.
+  string symbol = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  // Sector name.
+  string name = 2;
+  // Percentage change over the measured period.
+  double change = 3;
+}

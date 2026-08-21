@@ -1,0 +1,52 @@
+{
+  "$comment": [
+    "Accepted-problem baseline for scripts/check-seed-freshness.mjs.",
+    "",
+    "The acceptance gate fails on any compact-health problem that is NOT listed here.",
+    "An entry means: this degradation is known, has an owner record, and must not page.",
+    "It does NOT mean the problem is acceptable forever -- expiresAt forces a re-review,",
+    "and the gate fails outright once that date passes.",
+    "",
+    "A temporary rollout entry may add an entry-level `expiresAt` bounded to the first",
+    "scheduled cron window. At or after that instant, its live problem blocks even when",
+    "the root expiresAt is later. A health-probe cutover requires either a completed",
+    "Railway-side pre-seed, a one-way durable activation marker, or this owner-bound, expiring acknowledgement.",
+    "",
+    "Entries are matched on name:status exactly. A source that recovers is reported as",
+    "'recovered' on the next run (prune it); a source that fails with a DIFFERENT status",
+    "than the one baselined is treated as new and blocks, which is the point.",
+    "",
+    "Every entry carries a real tracking issue, never the PR that introduced the entry:",
+    "a merged PR closes, and a suppression pointing at a closed PR has no owner.",
+    "",
+    "Softening fault statuses is the marketImplications blind spot the ON_DEMAND_KEYS policy",
+    "block in api/health.js exists to prevent."
+  ],
+  "expiresAt": "2026-08-27",
+  "acknowledged": [
+    {
+      "name": "flightDelays",
+      "status": "STALE_SEED",
+      "issue": 6987,
+      "reason": "Probe meta moves from seed-meta:aviation:faa (FAA-only alert count) to seed-meta:aviation:delays-bootstrap, written from the aggregate this probe actually serves. The new key does not exist until seed-aviation next runs, and this probe is meta-only against a served aggregate, so the gap reads STALE_SEED rather than EMPTY -- measured with classifyKey against this branch, not assumed. aviation:faa runs on a 45-minute interval, so the first tick after deploy closes it.",
+      "expiresAt": "2026-08-21T00:00:00.000Z",
+      "cutover": {
+        "probeKey": "seed-meta:aviation:delays-bootstrap",
+        "activatedAt": "2026-08-20T10:00:00.000Z",
+        "firstScheduledRunAt": "2026-08-21T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "xFeed",
+      "status": "EMPTY",
+      "issue": 6654,
+      "reason": "New ais-relay producer for curated X news-account monitoring. seed-meta:intelligence:x-feed:v1 cannot exist until X_BEARER_TOKEN is copied onto the ais-relay Railway service (it currently lives only on company-monitoring-worker) and the 15-minute poll loop publishes once. EMPTY after that first scheduled poll is a missing secret or a dead loop, not a deploy window.",
+      "expiresAt": "2026-08-21T13:15:00.000Z",
+      "cutover": {
+        "probeKey": "seed-meta:intelligence:x-feed:v1",
+        "activatedAt": "2026-08-20T13:15:00.000Z",
+        "firstScheduledRunAt": "2026-08-21T13:15:00.000Z"
+      }
+    }
+  ]
+}

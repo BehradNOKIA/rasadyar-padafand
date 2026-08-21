@@ -1,0 +1,94 @@
+---
+title: "Embed World Monitor Panels"
+description: "Embed allowlisted World Monitor panels in a partner product with a script tag or iframe. Live map is public; keyed panels check the embedding account's API key, not the page visitor."
+---
+
+World Monitor exposes partner embeds at `/embed`. [WebMCP](/webmcp) is not an embedding mechanism—it registers tools so a browser agent can drive the top-level World Monitor site, while embed routes explicitly expose no WebMCP tools. Use `/embed` (or the loader below) to pull an allowlisted panel into another product.
+
+## Copy-paste loader
+
+Partners should ship one script tag. The loader creates the iframe and posts the embedding account's API key after load. **Never put the API key in the iframe URL.**
+
+```html
+<script
+  src="https://www.worldmonitor.app/embed.js"
+  data-panel="chokepoint-strip"
+  data-key="YOUR_WM_API_KEY"
+  data-theme="dark"
+  data-height="360"
+  async
+></script>
+```
+
+Replace `YOUR_WM_API_KEY` with a World Monitor user API key (`wm_…`) or enterprise key from the embedding account. Rotate that key independently of dashboard login. Query-string keys are rejected.
+
+Public live map (no key):
+
+```html
+<script
+  src="https://www.worldmonitor.app/embed.js"
+  data-panel="map"
+  data-theme="dark"
+  data-height="420"
+  async
+></script>
+```
+
+## Allowlisted panels
+
+| `panel` | Label | Entitlement |
+| --- | --- | --- |
+| `map` (aliases: `live-map`, `live_map`, `livemap`) | Live Map | Public. No API key. Default when `panel` is omitted. |
+| `chokepoint-strip` (aliases: `chokepoints`, `chokepoint`, `chokepoint-monitor`) | Chokepoint Monitor | Embedding API key with API access. |
+| `fear-greed` (aliases: `feargreed`, `fear_greed`, `markets-fear-greed`) | Fear & Greed | Embedding API key with API access. |
+
+Unknown `panel` values do not render. X / tweet-body panels are not embeddable: partners receive derived facts plus permalinks only, never post text.
+
+## Iframe (live map)
+
+The map remains available as a direct iframe. Omitting `panel` keeps the historical map-only contract.
+
+```html
+<iframe
+  src="https://www.worldmonitor.app/embed?layers=conflicts,earthquakes,weather&center=20,0&zoom=1&theme=dark&variant=full"
+  title="World Monitor live map"
+  loading="lazy"
+  referrerpolicy="strict-origin-when-cross-origin"
+  style="width:100%;height:420px;border:0;display:block"
+  allowfullscreen
+></iframe>
+```
+
+Keyed panels can also use an iframe at `/embed?panel=fear-greed`, but the partner page must `postMessage` `{ source: "worldmonitor-embed", type: "credential", key }` to the frame after it loads. Prefer the script loader.
+
+## Query parameters
+
+| Parameter | Example | Notes |
+| --- | --- | --- |
+| `panel` | `chokepoint-strip` | Allowlisted panel id. Default `map`. |
+| `layers` | `conflicts,earthquakes,weather` | Map only. Allow-listed public layers: `conflicts`, `earthquakes`, `protests`, `weather`, plus the documented static map layers. Unknown, premium, authenticated, or high-frequency layers are ignored. |
+| `center` | `25.2,55.3` | Map only. Latitude and longitude, clamped to valid ranges. |
+| `zoom` | `4` | Map only. Clamped between `1` and `10`. |
+| `theme` | `dark` | `dark` or `light`. |
+| `variant` | `full` | One of `full`, `tech`, `finance`, `commodity`, `happy`, or `energy`. |
+| `key` | — | **Not accepted.** Keys belong in `X-WorldMonitor-Key` via the loader, never in the query string. |
+
+Loader `data-*` attributes:
+
+| Attribute | Example | Notes |
+| --- | --- | --- |
+| `data-panel` | `fear-greed` | Same allowlist as `?panel=`. |
+| `data-key` | `YOUR_WM_API_KEY` | Embedding account key. Omitted for the public map. |
+| `data-theme` | `dark` | Passed through to the iframe. |
+| `data-height` | `360` | Iframe height in pixels, clamped 120–1200. |
+
+## Entitlement
+
+Keyed panels check the **embedding account**, not the person viewing the host page:
+
+- The iframe fetches `/api/embed/entitlement?panel=` with `credentials: 'omit'` and `X-WorldMonitor-Key`.
+- Viewer cookies and anonymous `wms_` session tokens are ignored.
+- Enterprise keys in `WORLDMONITOR_VALID_KEYS` and user keys (`wm_`) whose owner has `features.apiAccess` are accepted.
+- Use the dashboard **Embed** button to generate a snippet for the current public map view.
+
+Each embed includes a permanent attribution link back to World Monitor with source campaign parameters.

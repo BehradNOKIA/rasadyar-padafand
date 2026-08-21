@@ -1,0 +1,35 @@
+retailer:
+  slug: coldstorage_sg
+  name: Cold Storage Singapore
+  marketCode: sg
+  currencyCode: SGD
+  adapter: search
+  baseUrl: https://coldstorage.com.sg
+  enabled: true
+
+  searchConfig:
+    numResults: 5
+    queryTemplate: "{canonicalName} grocery singapore {currency} price"
+    # coldstorage.com.sg serves TWO live product shapes: the catalogue route
+    # `/en/p/<name>/i/<id>.html` and a legacy slug route `/product/<slug>`.
+    # `/p/` alone matches only the first, which loses any item Exa indexes
+    # solely under the legacy route (mineral water is the current example —
+    # all 5 results were `/product/` and the item logged 0 passed the filter).
+    # `/product/` does not contain `/p/`, so both patterns must be listed.
+    urlPathContains:
+      - /p/
+      - /product/
+    allowedHosts:
+      - www.coldstorage.com.sg
+    extractionFallback: exa
+    requireStrictValidator: true
+
+  rateLimit:
+    requestsPerMinute: 10
+    maxConcurrency: 1
+    delayBetweenRequestsMs: 6000
+
+  discovery:
+    mode: search
+    maxPages: 20
+    seeds: []
