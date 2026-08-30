@@ -132,6 +132,7 @@ import { onEntitlementChange } from '@/services/entitlements';
 import { hasPremiumAccess } from '@/services/panel-gating';
 import { trackGateHit } from '@/services/analytics';
 import { MapPopup, type PopupType } from './MapPopup';
+import { openAnalysisWithSourceObservation } from '@/features/analysis/sourceIntake';
 import { renderMilitaryVesselTooltipHtml } from './deckgl-tooltip-renderers';
 import type { GetChokepointStatusResponse } from '@/services/supply-chain';
 import type { ChinaCorridorControlTower } from '../../shared/china-corridor-control-towers';
@@ -575,6 +576,861 @@ export class DeckGLMap {
   private maplibreMap: maplibregl.Map | null = null;
   private state: DeckMapState;
   private popup: MapPopup;
+
+  /**
+   * The existing MapPopup already owns the visible «افزودن به تحلیل» action.
+   * For cyber-threat popups we intercept that action in capture phase and route
+   * the clicked threat through Rasadyar's unified source-intake layer so the
+   * canonical Evidence kind is "cyber" instead of the generic "map".
+   *
+   * Non-cyber map popups are intentionally left untouched.
+   */
+  private activeCyberThreatForAnalysis: CyberThreat | null = null;
+
+  private activeAviationForAnalysis: {
+    data: unknown;
+    popupType: PopupType;
+    layerId: string;
+  } | null = null;
+
+  private activeMaritimeForAnalysis: {
+    data: unknown;
+    popupType: PopupType;
+    layerId: string;
+  } | null = null;
+
+  private readonly handleAviationAnalysisAction = (event: Event): void => {
+    const context = this.activeAviationForAnalysis;
+    if (!context) return;
+
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    const button = target.closest('button');
+    if (!button) return;
+
+    const actions = button.closest('.rasadyar-map-analysis-actions');
+    if (!actions) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    this.openAviationInAnalysis(
+      context.data,
+      context.popupType,
+      context.layerId,
+    );
+  };
+
+  private readonly handleMaritimeAnalysisAction = (event: Event): void => {
+    const context = this.activeMaritimeForAnalysis;
+    if (!context) return;
+
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    const button = target.closest('button');
+    if (!button) return;
+
+    const actions = button.closest('.rasadyar-map-analysis-actions');
+    if (!actions) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    this.openMaritimeInAnalysis(
+      context.data,
+      context.popupType,
+      context.layerId,
+    );
+  };
+
+  private readonly handleCyberAnalysisAction = (event: Event): void => {
+    const threat = this.activeCyberThreatForAnalysis;
+    if (!threat) return;
+
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    const button = target.closest('button');
+    if (!button) return;
+
+    const actions = button.closest('.rasadyar-map-analysis-actions');
+    if (!actions) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    this.openCyberThreatInAnalysis(threat);
+  };
+
+  private pickCyberString(
+    record: Record<string, unknown>,
+    keys: readonly string[],
+  ): string | undefined {
+    for (const key of keys) {
+      const value = record[key];
+
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+      }
+
+      if (
+        (typeof value === 'number' || typeof value === 'boolean') &&
+        String(value).trim()
+      ) {
+        return String(value);
+      }
+    }
+
+    return undefined;
+  }
+
+  private pickAnalysisTime(
+    record: Record<string, unknown>,
+    keys: readonly string[],
+  ): string | undefined {
+    for (const key of keys) {
+      const value = record[key];
+
+      if (value instanceof Date && Number.isFinite(value.getTime())) {
+        return value.toISOString();
+      }
+
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        const date = new Date(value);
+
+        if (Number.isFinite(date.getTime())) {
+          return date.toISOString();
+        }
+      }
+
+      if (typeof value === 'string' && value.trim()) {
+        const date = new Date(value);
+
+        if (Number.isFinite(date.getTime())) {
+          return date.toISOString();
+        }
+
+        return value.trim();
+      }
+    }
+
+    return undefined;
+  }
+
+  private normalizeAnalysisSeverity(
+    value: unknown,
+  ): 'info' | 'low' | 'medium' | 'high' | 'critical' {
+    const severity = String(value ?? '').trim().toLowerCase();
+
+    if (
+      severity === 'critical' ||
+      severity === 'high' ||
+      severity === 'medium' ||
+      severity === 'low'
+    ) {
+      return severity;
+    }
+
+    if (
+      severity === 'severe' ||
+      severity === 'major' ||
+      severity === 'confirmed'
+    ) {
+      return 'high';
+    }
+
+    if (
+      severity === 'moderate' ||
+      severity === 'watch'
+    ) {
+      return 'medium';
+    }
+
+    return 'info';
+  }
+
+  private openAviationInAnalysis(
+    sourceData: unknown,
+    popupType: PopupType,
+    layerId: string,
+  ): void {
+    const raw =
+      (sourceData && typeof sourceData === 'object')
+        ? sourceData as Record<string, unknown>
+        : {};
+
+    const name =
+      this.pickCyberString(raw, [
+        'name',
+        'title',
+        'airportName',
+        'callsign',
+        'registration',
+        'flightNumber',
+        'icao24',
+        'hexCode',
+      ]);
+
+    const iata =
+      this.pickCyberString(raw, ['iata', 'iataCode']);
+
+    const icao =
+      this.pickCyberString(raw, [
+        'icao',
+        'icaoCode',
+        'icao24',
+        'hexCode',
+      ]);
+
+    const callsign =
+      this.pickCyberString(raw, [
+        'callsign',
+        'flightNumber',
+        'registration',
+      ]);
+
+    const reason =
+      this.pickCyberString(raw, [
+        'reason',
+        'description',
+        'summary',
+        'details',
+        'message',
+      ]);
+
+    const activityType =
+      this.pickCyberString(raw, [
+        'activityType',
+        'delayType',
+        'type',
+        'category',
+      ]);
+
+    const provider =
+      this.pickCyberString(raw, [
+        'source',
+        'provider',
+        'sourceName',
+        'feed',
+        'vendor',
+      ]) ||
+      (
+        popupType === 'militaryFlight' ||
+        popupType === 'militaryFlightCluster'
+          ? 'WorldMonitor Military Aviation'
+          : 'WorldMonitor Aviation'
+      );
+
+    const observedAt =
+      this.pickAnalysisTime(raw, [
+        'updatedAt',
+        'lastSeen',
+        'timestamp',
+        'observedAt',
+        'firstSeen',
+        'date',
+      ]);
+
+    const latValue = raw.lat ?? raw.latitude;
+    const lonValue = raw.lon ?? raw.lng ?? raw.longitude;
+
+    const lat =
+      typeof latValue === 'number' && Number.isFinite(latValue)
+        ? latValue
+        : undefined;
+
+    const lon =
+      typeof lonValue === 'number' && Number.isFinite(lonValue)
+        ? lonValue
+        : undefined;
+
+    const severity =
+      this.normalizeAnalysisSeverity(raw.severity);
+
+    const observationType =
+      layerId === 'notam-overlay-layer'
+        ? 'aviation-notam'
+        : popupType === 'flight'
+          ? 'aviation-flight-delay'
+          : popupType === 'aircraft'
+            ? 'aviation-aircraft-position'
+            : popupType === 'militaryFlight'
+              ? 'aviation-military-flight'
+              : popupType === 'militaryFlightCluster'
+                ? 'aviation-military-flight-cluster'
+                : 'aviation-observation';
+
+    const title =
+      popupType === 'flight'
+        ? (
+            name && iata
+              ? `${name} (${iata})`
+              : name || iata || 'رویداد هوانوردی'
+          )
+        : popupType === 'aircraft'
+          ? (
+              callsign ||
+              icao ||
+              name ||
+              'موقعیت هواپیما'
+            )
+          : popupType === 'militaryFlightCluster'
+            ? (
+                name ||
+                'خوشه پرواز نظامی'
+              )
+            : (
+                callsign ||
+                name ||
+                icao ||
+                'پرواز نظامی'
+              );
+
+    const altitude =
+      typeof raw.altitudeFt === 'number'
+        ? raw.altitudeFt
+        : typeof raw.altitude === 'number'
+          ? raw.altitude
+          : null;
+
+    const speed =
+      typeof raw.groundSpeedKts === 'number'
+        ? raw.groundSpeedKts
+        : typeof raw.speed === 'number'
+          ? raw.speed
+          : null;
+
+    const flightCount =
+      typeof raw.flightCount === 'number'
+        ? raw.flightCount
+        : null;
+
+    const summary = [
+      reason || '',
+      activityType
+        ? `نوع / وضعیت: ${activityType}`
+        : '',
+      iata
+        ? `IATA: ${iata}`
+        : '',
+      icao
+        ? `ICAO / شناسه: ${icao}`
+        : '',
+      altitude !== null
+        ? `ارتفاع: ${altitude}`
+        : '',
+      speed !== null
+        ? `سرعت: ${speed}`
+        : '',
+      flightCount !== null
+        ? `تعداد پرواز: ${flightCount}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n') ||
+      'مشاهده هوانوردی ثبت‌شده از لایه نقشه رصدیار پدافند.';
+
+    const explicitId =
+      this.pickCyberString(raw, [
+        'id',
+        'eventId',
+        'flightId',
+        'icao24',
+        'hexCode',
+        'callsign',
+        'registration',
+      ]);
+
+    const externalId =
+      explicitId ||
+      [
+        observationType,
+        iata || '',
+        icao || '',
+        callsign || '',
+        observedAt || '',
+        lat !== undefined ? lat.toFixed(4) : '',
+        lon !== undefined ? lon.toFixed(4) : '',
+      ]
+        .filter(Boolean)
+        .join('|');
+
+    const url =
+      this.pickCyberString(raw, [
+        'url',
+        'link',
+        'sourceUrl',
+        'referenceUrl',
+      ]);
+
+    openAnalysisWithSourceObservation({
+      kind: 'aviation',
+      title,
+      provider,
+      externalId: externalId || undefined,
+      url,
+      lat,
+      lon,
+      sourceDomain: 'هوانوردی',
+      observationType,
+      observedAt,
+      summary,
+      severity,
+      tags: [
+        'aviation',
+        'map',
+        observationType,
+        severity,
+      ],
+      metadata: {
+        mapLayer: layerId,
+        popupType,
+        aviationName: name || '',
+        aviationIata: iata || '',
+        aviationIcao: icao || '',
+        aviationCallsign: callsign || '',
+        aviationActivityType: activityType || '',
+        altitude: altitude ?? 0,
+        speed: speed ?? 0,
+        flightCount: flightCount ?? 0,
+        latitude: lat ?? 0,
+        longitude: lon ?? 0,
+      },
+    });
+  }
+
+  private openMaritimeInAnalysis(
+    sourceData: unknown,
+    popupType: PopupType,
+    layerId: string,
+  ): void {
+    const raw =
+      (sourceData && typeof sourceData === 'object')
+        ? sourceData as Record<string, unknown>
+        : {};
+
+    const name =
+      this.pickCyberString(raw, [
+        'name',
+        'title',
+        'vesselName',
+        'shipName',
+        'description',
+      ]);
+
+    const mmsi =
+      this.pickCyberString(raw, ['mmsi', 'MMSI']);
+
+    const imo =
+      this.pickCyberString(raw, ['imo', 'IMO']);
+
+    const flag =
+      this.pickCyberString(raw, [
+        'flag',
+        'flagCountry',
+        'country',
+        'countryCode',
+      ]);
+
+    const eventType =
+      this.pickCyberString(raw, [
+        'activityType',
+        'type',
+        'eventType',
+        'status',
+        'category',
+      ]);
+
+    const description =
+      this.pickCyberString(raw, [
+        'description',
+        'summary',
+        'details',
+        'message',
+        'note',
+      ]);
+
+    const provider =
+      this.pickCyberString(raw, [
+        'source',
+        'provider',
+        'sourceName',
+        'feed',
+        'vendor',
+      ]) ||
+      (
+        popupType === 'ais'
+          ? 'WorldMonitor AIS Monitoring'
+          : popupType === 'repair-ship'
+            ? 'WorldMonitor Cable Repair Monitoring'
+            : popupType === 'port'
+              ? 'WorldMonitor Strategic Ports'
+              : popupType === 'waterway'
+                ? 'WorldMonitor Strategic Waterways'
+                : 'WorldMonitor Maritime'
+      );
+
+    const observedAt =
+      this.pickAnalysisTime(raw, [
+        'lastAisUpdate',
+        'updatedAt',
+        'timestamp',
+        'observedAt',
+        'lastSeen',
+        'reported',
+        'date',
+      ]);
+
+    const latValue = raw.lat ?? raw.latitude;
+    const lonValue = raw.lon ?? raw.lng ?? raw.longitude;
+
+    const lat =
+      typeof latValue === 'number' && Number.isFinite(latValue)
+        ? latValue
+        : undefined;
+
+    const lon =
+      typeof lonValue === 'number' && Number.isFinite(lonValue)
+        ? lonValue
+        : undefined;
+
+    const severity =
+      this.normalizeAnalysisSeverity(raw.severity);
+
+    const observationType =
+      popupType === 'militaryVessel'
+        ? 'maritime-military-vessel'
+        : popupType === 'militaryVesselCluster'
+          ? 'maritime-military-vessel-cluster'
+          : popupType === 'ais'
+            ? 'maritime-ais-disruption'
+            : popupType === 'repair-ship'
+              ? 'maritime-repair-ship'
+              : popupType === 'port'
+                ? 'maritime-strategic-port'
+                : popupType === 'waterway'
+                  ? 'maritime-strategic-waterway'
+                  : 'maritime-observation';
+
+    const vesselCount =
+      typeof raw.vesselCount === 'number'
+        ? raw.vesselCount
+        : null;
+
+    const speed =
+      typeof raw.speed === 'number'
+        ? raw.speed
+        : typeof raw.speedKts === 'number'
+          ? raw.speedKts
+          : null;
+
+    const title =
+      popupType === 'ais'
+        ? `اختلال AIS${eventType ? ` — ${eventType}` : ''}`
+        : popupType === 'militaryVesselCluster'
+          ? (
+              name ||
+              'خوشه شناورهای نظامی'
+            )
+          : popupType === 'repair-ship'
+            ? (
+                name ||
+                'شناور تعمیر کابل'
+              )
+            : popupType === 'port'
+              ? (
+                  name ||
+                  'بندر راهبردی'
+                )
+              : popupType === 'waterway'
+                ? (
+                    name ||
+                    'گلوگاه / آبراه راهبردی'
+                  )
+                : (
+                    name ||
+                    mmsi ||
+                    imo ||
+                    'شناور نظامی'
+                  );
+
+    const summary = [
+      description || '',
+      eventType
+        ? `نوع / وضعیت: ${eventType}`
+        : '',
+      mmsi
+        ? `MMSI: ${mmsi}`
+        : '',
+      imo
+        ? `IMO: ${imo}`
+        : '',
+      flag
+        ? `پرچم / کشور: ${flag}`
+        : '',
+      speed !== null
+        ? `سرعت: ${speed}`
+        : '',
+      vesselCount !== null
+        ? `تعداد شناور: ${vesselCount}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n') ||
+      'مشاهده دریایی ثبت‌شده از لایه نقشه رصدیار پدافند.';
+
+    const explicitId =
+      this.pickCyberString(raw, [
+        'id',
+        'eventId',
+        'vesselId',
+        'mmsi',
+        'imo',
+      ]);
+
+    const externalId =
+      explicitId ||
+      [
+        observationType,
+        mmsi || '',
+        imo || '',
+        name || '',
+        observedAt || '',
+        lat !== undefined ? lat.toFixed(4) : '',
+        lon !== undefined ? lon.toFixed(4) : '',
+      ]
+        .filter(Boolean)
+        .join('|');
+
+    const url =
+      this.pickCyberString(raw, [
+        'url',
+        'link',
+        'sourceUrl',
+        'referenceUrl',
+      ]);
+
+    openAnalysisWithSourceObservation({
+      kind: 'maritime',
+      title,
+      provider,
+      externalId: externalId || undefined,
+      url,
+      country: flag || undefined,
+      region: flag || undefined,
+      lat,
+      lon,
+      sourceDomain: 'دریایی',
+      observationType,
+      observedAt,
+      summary,
+      severity,
+      tags: [
+        'maritime',
+        'map',
+        observationType,
+        severity,
+      ],
+      metadata: {
+        mapLayer: layerId,
+        popupType,
+        maritimeName: name || '',
+        maritimeMmsi: mmsi || '',
+        maritimeImo: imo || '',
+        maritimeFlag: flag || '',
+        maritimeEventType: eventType || '',
+        vesselCount: vesselCount ?? 0,
+        speed: speed ?? 0,
+        latitude: lat ?? 0,
+        longitude: lon ?? 0,
+      },
+    });
+  }
+
+  private openCyberThreatInAnalysis(threat: CyberThreat): void {
+    const raw = threat as unknown as Record<string, unknown>;
+
+    const country =
+      this.pickCyberString(raw, ['country', 'countryCode', 'countryName']) ||
+      'نامشخص';
+
+    const severityRaw =
+      (
+        this.pickCyberString(raw, ['severity', 'level', 'riskLevel']) ||
+        'info'
+      ).toLowerCase();
+
+    const severity:
+      | 'info'
+      | 'low'
+      | 'medium'
+      | 'high'
+      | 'critical' =
+      severityRaw === 'critical' ||
+      severityRaw === 'high' ||
+      severityRaw === 'medium' ||
+      severityRaw === 'low'
+        ? severityRaw
+        : 'info';
+
+    const indicator =
+      this.pickCyberString(raw, [
+        'indicator',
+        'ioc',
+        'value',
+        'ip',
+        'domain',
+        'hostname',
+        'host',
+        'hash',
+      ]);
+
+    const indicatorType =
+      this.pickCyberString(raw, [
+        'indicatorType',
+        'iocType',
+        'type',
+        'threatType',
+        'category',
+      ]);
+
+    const provider =
+      this.pickCyberString(raw, [
+        'source',
+        'provider',
+        'vendor',
+        'sourceName',
+        'feed',
+      ]) ||
+      'WorldMonitor Cyber Threats';
+
+    const title =
+      this.pickCyberString(raw, ['title', 'name', 'label']) ||
+      (indicator
+        ? `تهدید سایبری: ${indicator}`
+        : `تهدید سایبری — ${country}`);
+
+    const directSummary =
+      this.pickCyberString(raw, [
+        'summary',
+        'description',
+        'details',
+        'message',
+        'note',
+      ]);
+
+    const summary =
+      directSummary ||
+      [
+        `شدت: ${severity}`,
+        country !== 'نامشخص' ? `کشور / منطقه: ${country}` : '',
+        indicator ? `شاخص تهدید: ${indicator}` : '',
+        indicatorType ? `نوع شاخص: ${indicatorType}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+    const url =
+      this.pickCyberString(raw, [
+        'url',
+        'link',
+        'referenceUrl',
+        'reference',
+        'sourceUrl',
+      ]);
+
+    const observedAt =
+      this.pickCyberString(raw, [
+        'timestamp',
+        'observedAt',
+        'lastSeen',
+        'updatedAt',
+        'firstSeen',
+        'date',
+      ]);
+
+    const explicitId =
+      this.pickCyberString(raw, [
+        'id',
+        'eventId',
+        'threatId',
+        'indicatorId',
+      ]);
+
+    const lat =
+      typeof threat.lat === 'number' && Number.isFinite(threat.lat)
+        ? threat.lat
+        : undefined;
+
+    const lon =
+      typeof threat.lon === 'number' && Number.isFinite(threat.lon)
+        ? threat.lon
+        : undefined;
+
+    const fallbackId = [
+      country,
+      indicator || '',
+      indicatorType || '',
+      lat !== undefined ? lat.toFixed(4) : '',
+      lon !== undefined ? lon.toFixed(4) : '',
+      severity,
+    ]
+      .filter(Boolean)
+      .join('|');
+
+    const externalId =
+      explicitId ||
+      indicator ||
+      fallbackId ||
+      undefined;
+
+    const confidenceValue = raw.confidence;
+    const confidence =
+      typeof confidenceValue === 'number' && Number.isFinite(confidenceValue)
+        ? Math.max(0, Math.min(1, confidenceValue))
+        : undefined;
+
+    openAnalysisWithSourceObservation({
+      kind: 'cyber',
+      title,
+      provider,
+      externalId,
+      url,
+      country: country !== 'نامشخص' ? country : undefined,
+      region: country !== 'نامشخص' ? country : undefined,
+      lat,
+      lon,
+      sourceDomain: 'سایبری',
+      observationType: indicatorType
+        ? `cyber-threat-${indicatorType.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`
+        : 'cyber-threat-ioc',
+      observedAt,
+      summary,
+      severity,
+      confidence,
+      tags: [
+        'cyber',
+        'cyber-threats-map',
+        severity,
+        indicatorType
+          ? indicatorType.toLowerCase().replace(/\s+/g, '-')
+          : 'ioc',
+      ],
+      metadata: {
+        mapLayer: 'cyberThreats',
+        cyberCountry: country,
+        cyberSeverity: severity,
+        cyberIndicator: indicator || '',
+        cyberIndicatorType: indicatorType || '',
+        cyberProvider: provider,
+        latitude: lat ?? 0,
+        longitude: lon ?? 0,
+      },
+    });
+  }
+
   private isResizing = false;
   private savedTopLat: number | null = null;
   private correctingCenter = false;
@@ -881,6 +1737,24 @@ export class DeckGLMap {
 
     this.setupDOM();
     this.popup = new MapPopup(container);
+
+    /*
+     * Rasadyar P4 source-intake interception:
+     *
+     * MapPopup positions its UI in viewport space and its analysis action is not
+     * guaranteed to remain inside the DeckGLMap container's DOM subtree.
+     * Listening only on `this.container` therefore misses some popup actions
+     * (observed with airport / flight popups), causing MapPopup's legacy
+     * `kind: "map"` handler to run instead.
+     *
+     * Capture at document level so the specialized source handler runs before
+     * the generic MapPopup button handler regardless of where the popup DOM is
+     * mounted. Each handler is still gated by the active popup context, so
+     * unrelated map-analysis buttons continue through the existing generic flow.
+     */
+    document.addEventListener('click', this.handleCyberAnalysisAction, true);
+    document.addEventListener('click', this.handleAviationAnalysisAction, true);
+    document.addEventListener('click', this.handleMaritimeAnalysisAction, true);
 
     this.handleThemeChange = () => {
       if (isHappyVariant) {
@@ -5110,6 +5984,9 @@ export class DeckGLMap {
   ]);
 
   private handleClick(info: PickingInfo): void {
+    this.activeCyberThreatForAnalysis = null;
+    this.activeAviationForAnalysis = null;
+    this.activeMaritimeForAnalysis = null;
     const isChoropleth = info.layer?.id ? DeckGLMap.CHOROPLETH_LAYER_IDS.has(info.layer.id) : false;
     if (!info.object || isChoropleth) {
       if (info.coordinate && this.onCountryClick) {
@@ -5383,6 +6260,38 @@ export class DeckGLMap {
     if (popupType === 'militaryFlight') {
       const hex = (data as MilitaryFlight).hexCode;
       if (hex) this.toggleFlightTrail(hex);
+    }
+
+    if (popupType === 'cyberThreat') {
+      this.activeCyberThreatForAnalysis = data as CyberThreat;
+    }
+
+    if (
+      popupType === 'flight' ||
+      popupType === 'aircraft' ||
+      popupType === 'militaryFlight' ||
+      popupType === 'militaryFlightCluster'
+    ) {
+      this.activeAviationForAnalysis = {
+        data,
+        popupType,
+        layerId,
+      };
+    }
+
+    if (
+      popupType === 'militaryVessel' ||
+      popupType === 'militaryVesselCluster' ||
+      popupType === 'ais' ||
+      popupType === 'repair-ship' ||
+      popupType === 'port' ||
+      popupType === 'waterway'
+    ) {
+      this.activeMaritimeForAnalysis = {
+        data,
+        popupType,
+        layerId,
+      };
     }
 
     this.popup.show({
@@ -8103,6 +9012,9 @@ export class DeckGLMap {
   }
 
   public destroy(): void {
+    document.removeEventListener('click', this.handleCyberAnalysisAction, true);
+    document.removeEventListener('click', this.handleAviationAnalysisAction, true);
+    document.removeEventListener('click', this.handleMaritimeAnalysisAction, true);
     this.destroyed = true;
     this.aircraftFetchSeq += 1;
     this.settleViewportMovement(false);

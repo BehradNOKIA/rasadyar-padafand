@@ -1,4 +1,5 @@
 import { Panel } from './Panel';
+import { openAnalysisWithSourceObservation } from '@/features/analysis/sourceIntake';
 import { t } from '@/services/i18n';
 import type { MarketData, CryptoData, TokenData } from '@/types';
 import { formatPrice, formatChange, getChangeClass, getHeatmapClass } from '@/utils';
@@ -57,9 +58,237 @@ export class MarketPanel extends Panel {
   private _marketsUnavailable: readonly MarketQuoteUnavailable[] = [];
   private _disclosures: ChinaCorporateDisclosureSnapshot | null = null;
 
+  private canAddMarketToAnalysis(): boolean {
+    try {
+      const currentUser = JSON.parse(
+        localStorage.getItem('rasadyar_user') || 'null'
+      );
+
+      return (
+        currentUser?.role === 'superadmin' ||
+        currentUser?.role === 'analyst'
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private cleanMarketAnalysisText(value: unknown): string {
+    const raw = String(value ?? '');
+
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.innerHTML = raw;
+
+      return (textarea.value || textarea.textContent || raw)
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\u00a0/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    } catch {
+      return raw
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+  }
+
+  private renderMarketAnalysisButton(index: number): string {
+    if (!this.canAddMarketToAnalysis()) {
+      return '';
+    }
+
+    return `
+      <button
+        type="button"
+        class="market-analysis-btn"
+        data-market-analysis-index="${index}"
+        title="افزودن این داده بازار به مرکز تحلیل"
+        aria-label="افزودن این داده بازار به مرکز تحلیل"
+        style="
+          margin-inline-start:6px;
+          padding:3px 7px;
+          border:1px solid rgba(34,197,94,.70);
+          border-radius:5px;
+          background:rgba(20,83,45,.90);
+          color:#dcfce7;
+          cursor:pointer;
+          font-size:10px;
+          line-height:1.4;
+          font-family:inherit;
+          white-space:nowrap;
+        "
+      >
+        + تحلیل
+      </button>
+    `;
+  }
+
+  private addMarketToAnalysis(index: number): void {
+    const stock = this._markets[index];
+
+    if (!stock) {
+      console.warn(
+        '[MarketPanel] Market item not found for analysis:',
+        index
+      );
+
+      return;
+    }
+
+    const price =
+      typeof stock.price === 'number' &&
+      Number.isFinite(stock.price)
+        ? stock.price
+        : null;
+
+    const change =
+      typeof stock.change === 'number' &&
+      Number.isFinite(stock.change)
+        ? stock.change
+        : null;
+
+    const name =
+      this.cleanMarketAnalysisText(
+        stock.name
+      ) ||
+      stock.symbol;
+
+    const display =
+      this.cleanMarketAnalysisText(
+        stock.display
+      ) ||
+      stock.symbol;
+
+    const capturedAt =
+      new Date().toISOString();
+
+    const summaryParts = [
+      `داده بازار ثبت‌شده در پنل بازار رصدیار برای ${name}.`,
+
+      price !== null
+        ? `قیمت ثبت‌شده: ${formatPrice(price)}.`
+        : '',
+
+      change !== null
+        ? `تغییر ثبت‌شده: ${formatChange(change)}.`
+        : '',
+
+      `نماد: ${display}.`,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    openAnalysisWithSourceObservation({
+      kind: 'economic',
+
+      title:
+        `${name} (${display})`,
+
+      provider:
+        'WorldMonitor Market Panel',
+
+      source:
+        'WorldMonitor Market Panel',
+
+      sourceDomain:
+        'اقتصادی',
+
+      externalId:
+        stock.symbol,
+
+      observationType:
+        'market-quote',
+
+      observedAt:
+        capturedAt,
+
+      summary:
+        summaryParts,
+
+      severity:
+        change !== null &&
+        Math.abs(change) >= 5
+          ? 'high'
+          : change !== null &&
+              Math.abs(change) >= 2
+            ? 'medium'
+            : 'info',
+
+      tags: [
+        'economic',
+        'market',
+        'quote',
+        stock.symbol,
+      ],
+
+      metadata: {
+        panelId:
+          'markets',
+
+        marketSymbol:
+          stock.symbol,
+
+        marketDisplay:
+          display,
+
+        marketName:
+          name,
+
+        price,
+
+        change,
+
+        sparklinePoints:
+          Array.isArray(stock.sparkline)
+            ? stock.sparkline.length
+            : 0,
+
+        observationTimeBasis:
+          'panel-capture-time',
+      },
+    });
+  }
+
   constructor() {
     super({ id: 'markets', title: t('panels.markets'), infoTooltip: t('components.markets.infoTooltip') });
     this.header.appendChild(createWatchlistButton());
+
+    // P4-Step3: Economic / Market -> Analysis.
+    // Register this handler before chart activation so a click on the analysis
+    // button does not also open the market chart/research view.
+    this.content.addEventListener('click', (event) => {
+      const target =
+        event.target as HTMLElement;
+
+      const marketAnalysisBtn =
+        target.closest<HTMLElement>(
+          '.market-analysis-btn'
+        );
+
+      if (!marketAnalysisBtn) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      const index =
+        Number(
+          marketAnalysisBtn.dataset.marketAnalysisIndex
+        );
+
+      if (
+        Number.isInteger(index) &&
+        index >= 0
+      ) {
+        this.addMarketToAnalysis(
+          index
+        );
+      }
+    });
 
     // Delegated once on the persistent content element (each render only swaps
     // innerHTML): click or Enter/Space on a plottable ticker opens its terminal chart.
@@ -110,6 +339,7 @@ export class MarketPanel extends Panel {
           ${miniSparkline(stock.sparkline, stock.change)}
           <span class="market-price">${formatPrice(stock.price!)}</span>
           <span class="market-change ${getChangeClass(stock.change!)}">${formatChange(stock.change!)}</span>
+          ${this.renderMarketAnalysisButton(idx)}
         </div>
       </div>
     `;

@@ -1889,6 +1889,15 @@
       ]
     },
     {
+      "host": "blog.google",
+      "provider": "blog.google",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit blog.google and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "bloomberg.com",
       "provider": "bloomberg.com",
       "kind": "feed",
@@ -2895,6 +2904,15 @@
           "path": "src/config/feeds.ts"
         }
       ]
+    },
+    {
+      "host": "deepmind.google",
+      "provider": "deepmind.google",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit deepmind.google and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "defense.gov",
@@ -3965,6 +3983,15 @@
       ]
     },
     {
+      "host": "feeds.marketwatch.com",
+      "provider": "feeds.marketwatch.com",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit feeds.marketwatch.com and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "feeds.megaphone.fm",
       "provider": "feeds.megaphone.fm",
       "kind": "feed",
@@ -4802,6 +4829,15 @@
       ]
     },
     {
+      "host": "home.treasury.gov",
+      "provider": "home.treasury.gov",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit home.treasury.gov and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "hromadske.ua",
       "provider": "hromadske.ua",
       "kind": "feed",
@@ -4817,6 +4853,15 @@
           "path": "src/config/feeds.ts"
         }
       ]
+    },
+    {
+      "host": "huggingface.co",
+      "provider": "huggingface.co",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit huggingface.co and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "humanprogress.org",
@@ -4849,6 +4894,20 @@
         },
         {
           "path": "src/config/feeds.ts"
+        }
+      ]
+    },
+    {
+      "host": "i.ytimg.com",
+      "provider": "i.ytimg.com",
+      "kind": "feed",
+      "observed": true,
+      "license": "Excluded: live-video playback transport; channel/provider terms apply separately",
+      "attribution": "Excluded from the external-provider count: presentation-only HLS stream, not an ingested dataset.",
+      "status": "excluded",
+      "references": [
+        {
+          "path": "src/components/LiveNewsPanel.ts"
         }
       ]
     },
@@ -6633,6 +6692,15 @@
       "status": "excluded"
     },
     {
+      "host": "openai.com",
+      "provider": "openai.com",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit openai.com and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "opendata.adsb.fi",
       "provider": "adsb.fi Open Data",
       "kind": "structured",
@@ -6697,6 +6765,9 @@
         },
         {
           "path": "scripts/seed-military-flights.mjs"
+        },
+        {
+          "path": "server/worldmonitor/aviation/v1/track-aircraft.ts"
         },
         {
           "path": "server/worldmonitor/military/v1/list-military-flights.ts"
@@ -7595,6 +7666,24 @@
           "path": "src/config/feeds.ts"
         }
       ]
+    },
+    {
+      "host": "rss.arxiv.org",
+      "provider": "rss.arxiv.org",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit rss.arxiv.org and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
+      "host": "rss.cnn.com",
+      "provider": "rss.cnn.com",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit rss.cnn.com and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "rss.dw.com",
@@ -10332,6 +10421,15 @@
       ]
     },
     {
+      "host": "www.anthropic.com",
+      "provider": "www.anthropic.com",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.anthropic.com and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "www.asahi.com",
       "provider": "www.asahi.com",
       "kind": "feed",
@@ -10479,6 +10577,15 @@
       ]
     },
     {
+      "host": "www.bellingcat.com",
+      "provider": "www.bellingcat.com",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.bellingcat.com and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "www.bild.de",
       "provider": "www.bild.de",
       "kind": "feed",
@@ -10519,6 +10626,15 @@
           "path": "src/config/feeds.ts"
         }
       ]
+    },
+    {
+      "host": "www.brookings.edu",
+      "provider": "www.brookings.edu",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.brookings.edu and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "www.businessinsider.com",
@@ -10646,6 +10762,15 @@
           "path": "src/config/feeds.ts"
         }
       ]
+    },
+    {
+      "host": "www.cfr.org",
+      "provider": "www.cfr.org",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.cfr.org and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "www.cftc.gov",
@@ -10985,6 +11110,15 @@
       ]
     },
     {
+      "host": "www.defense.gov",
+      "provider": "www.defense.gov",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.defense.gov and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "www.defensenews.com",
       "provider": "www.defensenews.com",
       "kind": "feed",
@@ -11017,6 +11151,15 @@
           "path": "src/config/feeds.ts"
         }
       ]
+    },
+    {
+      "host": "www.dhs.gov",
+      "provider": "www.dhs.gov",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.dhs.gov and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "www.digi24.ro",
@@ -11345,6 +11488,15 @@
           "path": "src/config/variants/finance.ts"
         }
       ]
+    },
+    {
+      "host": "www.fema.gov",
+      "provider": "www.fema.gov",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.fema.gov and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "www.flightglobal.com",
@@ -11964,6 +12116,15 @@
           "path": "src/config/feeds.ts"
         }
       ]
+    },
+    {
+      "host": "www.justice.gov",
+      "provider": "www.justice.gov",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.justice.gov and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "www.jutarnji.hr",
@@ -12836,6 +12997,15 @@
       ]
     },
     {
+      "host": "www.reutersagency.com",
+      "provider": "www.reutersagency.com",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.reutersagency.com and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "www.rfi.fr",
       "provider": "www.rfi.fr",
       "kind": "feed",
@@ -13161,6 +13331,15 @@
       ]
     },
     {
+      "host": "www.state.gov",
+      "provider": "www.state.gov",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.state.gov and link to the original upstream API/dataset.",
+      "status": "excluded"
+    },
+    {
       "host": "www.stats.gov.cn",
       "provider": "www.stats.gov.cn",
       "kind": "structured",
@@ -13436,6 +13615,15 @@
           "path": "scripts/seed-global-tenders.mjs"
         }
       ]
+    },
+    {
+      "host": "www.thedrive.com",
+      "provider": "www.thedrive.com",
+      "kind": "structured",
+      "observed": false,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit www.thedrive.com and link to the original upstream API/dataset.",
+      "status": "excluded"
     },
     {
       "host": "www.theglobeandmail.com",
@@ -13743,7 +13931,7 @@
     {
       "host": "www.w3.org",
       "provider": "W3C schema reference",
-      "kind": "structured",
+      "kind": "feed+structured",
       "observed": true,
       "license": "Excluded: schema/standards reference",
       "attribution": "Excluded from the provider count: standards reference, not an ingested source.",
@@ -13751,6 +13939,9 @@
       "references": [
         {
           "path": "api/fwdstart.js"
+        },
+        {
+          "path": "src/components/LiveNewsPanel.ts"
         },
         {
           "path": "src/embed/panels/fear-greed.ts"

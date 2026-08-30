@@ -34,6 +34,7 @@ import {
 } from '@/config/map-layer-definitions';
 import { renderLayerExplanationCard } from '@/utils/layer-explanation-card';
 import { guardOrbitControlsPointerTracking } from '@/utils/orbit-controls-pointer-guard';
+import { openAnalysisWithEvidence } from '@/features/analysis/analysisBridge';
 import { getAuthState } from '@/services/auth-state';
 import { resolveTradeRouteSegments, type TradeRouteSegment } from '@/config/trade-routes';
 import { GAMMA_IRRADIATORS } from '@/config/irradiators';
@@ -1445,6 +1446,465 @@ export class GlobeMap {
     this.showMarkerTooltip(d, anchor);
   }
 
+  private appendGlobeAnalysisButton(
+  d: GlobeMarker,
+  el: HTMLElement
+): void {
+  /*
+   * فقط مدیر اصلی و تحلیلگر
+   */
+  let allowed = false;
+
+  try {
+    const user = JSON.parse(
+      localStorage.getItem('rasadyar_user') || 'null'
+    );
+
+    allowed =
+      user?.role === 'superadmin' ||
+      user?.role === 'analyst';
+  } catch {
+    allowed = false;
+  }
+
+  if (!allowed) return;
+
+  /*
+   * جلوگیری از ساخت دکمه تکراری
+   */
+  if (
+    el.querySelector(
+      '.rasadyar-globe-analysis-actions'
+    )
+  ) {
+    return;
+  }
+
+  /*
+   * چون GlobeMarker برای لایه‌های مختلف
+   * ساختارهای متفاوت دارد، داده را عمومی می‌خوانیم.
+   */
+  const marker =
+    d as unknown as Record<string, unknown>;
+
+  const pickString = (
+    ...values: unknown[]
+  ): string | undefined => {
+    for (const value of values) {
+      if (
+        typeof value === 'string' &&
+        value.trim()
+      ) {
+        return value.trim();
+      }
+    }
+
+    return undefined;
+  };
+
+  const pickNumber = (
+    ...values: unknown[]
+  ): number | undefined => {
+    for (const value of values) {
+      if (
+        typeof value === 'number' &&
+        Number.isFinite(value)
+      ) {
+        return value;
+      }
+
+      if (
+        typeof value === 'string' &&
+        value.trim()
+      ) {
+        const parsed = Number(value);
+
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+    }
+
+    return undefined;
+  };
+
+  const normalizeTimestamp = (
+    value: unknown
+  ): string | undefined => {
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+
+    if (typeof value === 'number') {
+      const milliseconds =
+        value < 10_000_000_000
+          ? value * 1000
+          : value;
+
+      const date =
+        new Date(milliseconds);
+
+      if (
+        !Number.isNaN(
+          date.getTime()
+        )
+      ) {
+        return date.toISOString();
+      }
+    }
+
+    if (
+      typeof value === 'string' &&
+      value.trim()
+    ) {
+      const date =
+        new Date(value);
+
+      if (
+        !Number.isNaN(
+          date.getTime()
+        )
+      ) {
+        return date.toISOString();
+      }
+
+      return value;
+    }
+
+    return undefined;
+  };
+
+  /*
+   * نوع Marker
+   */
+  const kind =
+    pickString(
+      marker['_kind'],
+      marker['kind'],
+      marker['type']
+    ) || 'رویداد';
+
+  /*
+   * عنوان
+   */
+  const title =
+    pickString(
+      marker['name'],
+      marker['title'],
+      marker['facilityName'],
+      marker['baseName'],
+      marker['headline'],
+      marker['eventName'],
+      marker['locationName'],
+      marker['location'],
+      marker['place'],
+      marker['city']
+    ) ||
+    `رویداد سه‌بعدی: ${kind}`;
+
+  /*
+   * کشور
+   */
+  const country =
+    pickString(
+      marker['country'],
+      marker['countryName'],
+      marker['operatorCountry'],
+      marker['nation']
+    );
+
+  /*
+   * منطقه
+   */
+  const region =
+    pickString(
+      marker['region'],
+      marker['province'],
+      marker['state'],
+      marker['zone'],
+      marker['city'],
+      marker['locationName']
+    );
+
+  /*
+   * منبع
+   */
+  const source =
+    pickString(
+      marker['source'],
+      marker['provider'],
+      marker['agency'],
+      marker['operator'],
+      marker['organization']
+    );
+
+  /*
+   * مختصات
+   */
+  const lat =
+    pickNumber(
+      marker['_lat'],
+      marker['lat'],
+      marker['latitude']
+    );
+
+  const lon =
+    pickNumber(
+      marker['_lng'],
+      marker['_lon'],
+      marker['lng'],
+      marker['lon'],
+      marker['longitude']
+    );
+
+  /*
+   * زمان
+   */
+  const timestamp =
+    normalizeTimestamp(
+      marker['timestamp'] ??
+      marker['time'] ??
+      marker['date'] ??
+      marker['updatedAt'] ??
+      marker['createdAt'] ??
+      marker['startTime']
+    ) ||
+    new Date().toISOString();
+
+  /*
+   * لینک منبع
+   */
+  let url =
+    pickString(
+      marker['url'],
+      marker['link'],
+      marker['sourceUrl'],
+      marker['website']
+    );
+
+  const sourceUrls =
+    marker['sourceUrls'];
+
+  if (
+    !url &&
+    Array.isArray(sourceUrls) &&
+    typeof sourceUrls[0] === 'string'
+  ) {
+    url = sourceUrls[0];
+  }
+
+  /*
+   * ساخت توضیح تحلیلی
+   */
+  const details: string[] = [];
+
+  details.push(
+    `نوع رویداد: ${kind}`
+  );
+
+  const markerType =
+    pickString(
+      marker['type'],
+      marker['facilityType'],
+      marker['baseType'],
+      marker['eventType']
+    );
+
+  if (markerType) {
+    details.push(
+      `نوع: ${markerType}`
+    );
+  }
+
+  const status =
+    pickString(
+      marker['status'],
+      marker['state']
+    );
+
+  if (status) {
+    details.push(
+      `وضعیت: ${status}`
+    );
+  }
+
+  const severity =
+    pickString(
+      marker['severity'],
+      marker['level']
+    );
+
+  if (severity) {
+    details.push(
+      `شدت: ${severity}`
+    );
+  }
+
+  if (country) {
+    details.push(
+      `کشور: ${country}`
+    );
+  }
+
+  if (
+    lat !== undefined &&
+    lon !== undefined
+  ) {
+    details.push(
+      `مختصات: ${lat.toFixed(4)}, ${lon.toFixed(4)}`
+    );
+  }
+
+  const description =
+    pickString(
+      marker['description'],
+      marker['summary'],
+      marker['details'],
+      marker['notes'],
+      marker['message']
+    );
+
+  if (description) {
+    details.push(
+      description
+    );
+  }
+
+  const summary =
+    details.join(' | ');
+
+  /*
+   * Tooltip ممکن است یک wrapper داخلی داشته باشد.
+   */
+  const host =
+    el.firstElementChild instanceof HTMLElement
+      ? el.firstElementChild
+      : el;
+
+  /*
+   * محفظه دکمه
+   */
+  const actions =
+    document.createElement('div');
+
+  actions.className =
+    'rasadyar-globe-analysis-actions';
+
+  actions.style.cssText = `
+    display:flex;
+    align-items:center;
+    justify-content:flex-start;
+    gap:8px;
+
+    margin-top:10px;
+    padding-top:8px;
+
+    border-top:
+      1px solid rgba(255,255,255,.14);
+
+    direction:rtl;
+  `;
+
+  /*
+   * دکمه
+   */
+  const button =
+    document.createElement('button');
+
+  button.type = 'button';
+
+  button.textContent =
+    'افزودن به تحلیل';
+
+  button.title =
+    'ارسال این رویداد سه‌بعدی به مرکز تحلیل';
+
+  button.style.cssText = `
+    padding:7px 11px;
+
+    border:
+      1px solid #22c55e;
+
+    border-radius:6px;
+
+    background:#14532d;
+
+    color:#ffffff;
+
+    cursor:pointer;
+
+    font-size:11px;
+
+    font-family:inherit;
+
+    transition:
+      background .15s ease,
+      border-color .15s ease;
+  `;
+
+  button.addEventListener(
+    'mouseenter',
+    () => {
+      button.style.background =
+        '#166534';
+
+      button.style.borderColor =
+        '#4ade80';
+    }
+  );
+
+  button.addEventListener(
+    'mouseleave',
+    () => {
+      button.style.background =
+        '#14532d';
+
+      button.style.borderColor =
+        '#22c55e';
+    }
+  );
+
+  /*
+   * ارسال Marker به مرکز تحلیل
+   */
+  button.addEventListener(
+    'click',
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      openAnalysisWithEvidence({
+        kind: 'map',
+
+        title,
+
+        source,
+
+        url,
+
+        country,
+
+        region,
+
+        lat,
+
+        lon,
+
+        timestamp,
+
+        summary,
+      });
+    }
+  );
+
+  actions.appendChild(
+    button
+  );
+
+  host.appendChild(
+    actions
+  );
+}
   private showMarkerTooltip(d: GlobeMarker, anchor: HTMLElement): void {
     this.hideTooltip();
     const el = document.createElement('div');
@@ -1716,7 +2176,10 @@ export class GlobeMap {
     const wideKinds = new Set(['satellite', 'flightDelay', 'conflictZone', 'cableAdvisory', 'nuclearSite']);
     if (wideKinds.has(d._kind)) el.style.maxWidth = '300px';
     el.querySelector('button')?.addEventListener('click', () => this.hideTooltip());
-
+this.appendGlobeAnalysisButton(
+  d,
+  el
+);
     if (d._kind === 'conflictZone') {
       const details = el.querySelector<HTMLDetailsElement>('.conflict-history-details');
       const content = el.querySelector('.conflict-history-content');

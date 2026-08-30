@@ -12,7 +12,7 @@ import { getActiveLiveMedia, playAllLiveMedia, registerLiveMediaStarter, release
 import { getLiveStreamsAlwaysOn, subscribeLiveStreamsSettingsChange } from '@/services/live-stream-settings';
 import { track } from '@/services/analytics';
 import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
-
+import { openAnalysisWithEvidence } from '@/features/analysis/analysisBridge';
 
 // YouTube IFrame Player API types
 type YouTubePlayer = {
@@ -367,6 +367,7 @@ export class LiveNewsPanel extends Panel {
   private wasPlayingBeforeIdle = false;
   private muteBtn: HTMLButtonElement | null = null;
   private fullscreenBtn: HTMLButtonElement | null = null;
+  private analysisBtn: HTMLButtonElement | null = null;
   private isFullscreen = false;
   private liveBtn: HTMLButtonElement | null = null;
   private idleTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -474,34 +475,52 @@ export class LiveNewsPanel extends Panel {
     this.deferredInit = false;
     this.playerContainer = null;
     this.playerElement = null;
-    setTrustedHtml(this.content, trustedHtml('', "legacy direct innerHTML migration"));
+
+    setTrustedHtml(
+      this.content,
+      trustedHtml('', 'legacy direct innerHTML migration')
+    );
+
     const container = document.createElement('div');
     container.className = 'live-news-placeholder live-media-shell';
 
     const status = document.createElement('div');
     status.className = 'live-media-shell-status';
+
     const dot = document.createElement('span');
     dot.className = 'live-media-shell-dot';
+
     const statusText = document.createElement('span');
-    statusText.textContent = t('components.liveNews.readyStatus') || 'Ready when you are';
+    statusText.textContent =
+      t('components.liveNews.readyStatus') ||
+      'Ready when you are';
+
     status.append(dot, statusText);
 
     const label = document.createElement('div');
     label.className = 'live-media-shell-title';
-    label.textContent = this.getChannelDisplayName(this.activeChannel);
+    label.textContent =
+      this.getChannelDisplayName(this.activeChannel);
 
     const playBtn = document.createElement('button');
+    playBtn.type = 'button';
     playBtn.className = 'offline-retry';
-    playBtn.textContent = t('components.liveNews.playLiveFeed') || 'Play live feed';
-    playBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
+    playBtn.textContent =
+      t('components.liveNews.playLiveFeed') ||
+      'Play live feed';
+
+    playBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       playAllLiveMedia();
     });
 
-    container.appendChild(status);
-    container.appendChild(label);
-    container.appendChild(playBtn);
-    container.addEventListener('click', () => playAllLiveMedia());
+    container.append(status, label, playBtn);
+
+    container.addEventListener('click', () => {
+      playAllLiveMedia();
+    });
+
     this.content.appendChild(container);
   }
 
@@ -822,6 +841,756 @@ export class LiveNewsPanel extends Panel {
     }
   }
 
+  private canAddToAnalysis(): boolean {
+    try {
+      const rawUser =
+        localStorage.getItem('rasadyar_user') ||
+        localStorage.getItem('user');
+
+      if (!rawUser) return false;
+
+      const currentUser = JSON.parse(rawUser);
+
+      return (
+        currentUser?.role === 'superadmin' ||
+        currentUser?.role === 'analyst'
+      );
+    } catch (error) {
+      console.error(
+        '[LiveNews] Unable to read current Rasadyar user:',
+        error
+      );
+      return false;
+    }
+  }
+
+  private getActiveChannelEvidenceUrl(): string | undefined {
+    const channel = this.activeChannel;
+
+    if (channel.videoId) {
+      return `https://www.youtube.com/watch?v=${encodeURIComponent(channel.videoId)}`;
+    }
+
+    if (channel.fallbackVideoId) {
+      return `https://www.youtube.com/watch?v=${encodeURIComponent(channel.fallbackVideoId)}`;
+    }
+
+    if (channel.handle) {
+      return `https://www.youtube.com/${encodeURIComponent(channel.handle)}`;
+    }
+
+    if (channel.hlsUrl) {
+      return channel.hlsUrl;
+    }
+
+    return DIRECT_HLS_MAP[channel.id];
+  }
+
+  private makeEvidenceArchiveId(): string {
+    if (
+      typeof crypto !== 'undefined' &&
+      'randomUUID' in crypto
+    ) {
+      return crypto.randomUUID();
+    }
+
+    return `live-archive-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2)}`;
+  }
+
+  private getActiveChannelStreamUrl(): string | undefined {
+    const channel = this.activeChannel;
+
+    const directHls = DIRECT_HLS_MAP[channel.id];
+    if (directHls) return directHls;
+
+    const proxiedHls = PROXIED_HLS_MAP[channel.id];
+    if (proxiedHls?.url) return proxiedHls.url;
+
+    return channel.hlsUrl;
+  }
+
+  private async canvasToJpegDataUrl(
+    canvas: HTMLCanvasElement,
+    quality = 0.58
+  ): Promise<string> {
+    return await new Promise((resolve) => {
+      if (!canvas.toBlob) {
+        resolve(canvas.toDataURL('image/jpeg', quality));
+        return;
+      }
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            resolve(canvas.toDataURL('image/jpeg', quality));
+            return;
+          }
+
+          const reader = new FileReader();
+
+          reader.onload = () => {
+            resolve(
+              typeof reader.result === 'string'
+                ? reader.result
+                : canvas.toDataURL('image/jpeg', quality)
+            );
+          };
+
+          reader.onerror = () => {
+            resolve(canvas.toDataURL('image/jpeg', quality));
+          };
+
+          reader.readAsDataURL(blob);
+        },
+        'image/jpeg',
+        quality
+      );
+    });
+  }
+
+  private drawContainedImage(
+    context: CanvasRenderingContext2D,
+    source:
+      | HTMLVideoElement
+      | ImageBitmap,
+    sourceWidth: number,
+    sourceHeight: number,
+    targetWidth: number,
+    targetHeight: number
+  ): void {
+    const sourceRatio =
+      sourceWidth / Math.max(1, sourceHeight);
+
+    const targetRatio =
+      targetWidth / Math.max(1, targetHeight);
+
+    let width = targetWidth;
+    let height = targetHeight;
+    let x = 0;
+    let y = 0;
+
+    if (sourceRatio > targetRatio) {
+      height =
+        targetWidth / Math.max(0.0001, sourceRatio);
+      y = (targetHeight - height) / 2;
+    } else {
+      width =
+        targetHeight * sourceRatio;
+      x = (targetWidth - width) / 2;
+    }
+
+    context.fillStyle = '#000000';
+    context.fillRect(
+      0,
+      0,
+      targetWidth,
+      targetHeight
+    );
+
+    context.drawImage(
+      source,
+      x,
+      y,
+      width,
+      height
+    );
+  }
+
+  /**
+   * Exact-frame capture is possible only when a native HTMLVideoElement is
+   * readable by canvas. Cross-origin streams may intentionally block this.
+   */
+  private async captureNativeVideoFrame():
+    Promise<string | null> {
+    const video = this.nativeVideoElement;
+
+    if (
+      !video ||
+      video.readyState < 2 ||
+      !video.videoWidth ||
+      !video.videoHeight
+    ) {
+      return null;
+    }
+
+    try {
+      const canvas =
+        document.createElement('canvas');
+
+      canvas.width = 480;
+      canvas.height = 270;
+
+      const context =
+        canvas.getContext('2d');
+
+      if (!context) return null;
+
+      this.drawContainedImage(
+        context,
+        video,
+        video.videoWidth,
+        video.videoHeight,
+        canvas.width,
+        canvas.height
+      );
+
+      /*
+       * toDataURL/toBlob throws SecurityError when the video canvas is tainted.
+       * That is expected for many third-party live streams.
+       */
+      return await this.canvasToJpegDataUrl(
+        canvas,
+        0.58
+      );
+    } catch (error) {
+      console.info(
+        '[LiveNews] Exact frame capture unavailable for this stream; using fallback archive.',
+        error
+      );
+
+      return null;
+    }
+  }
+
+  /**
+   * YouTube iframes cannot be read as an exact frame from page JavaScript.
+   * We try to archive the video thumbnail as a stable visual identifier.
+   */
+  private async captureYouTubeThumbnail(
+    videoId: string | undefined
+  ): Promise<string | null> {
+    if (!videoId) return null;
+
+    try {
+      const response = await fetch(
+        `https://i.ytimg.com/vi/${encodeURIComponent(
+          videoId
+        )}/hqdefault.jpg`,
+        {
+          mode: 'cors',
+          credentials: 'omit',
+          cache: 'no-store',
+        }
+      );
+
+      if (!response.ok) return null;
+
+      const blob = await response.blob();
+
+      if (!blob.type.startsWith('image/')) {
+        return null;
+      }
+
+      const bitmap =
+        await createImageBitmap(blob);
+
+      try {
+        const canvas =
+          document.createElement('canvas');
+
+        canvas.width = 480;
+        canvas.height = 270;
+
+        const context =
+          canvas.getContext('2d');
+
+        if (!context) return null;
+
+        this.drawContainedImage(
+          context,
+          bitmap,
+          bitmap.width,
+          bitmap.height,
+          canvas.width,
+          canvas.height
+        );
+
+        return await this.canvasToJpegDataUrl(
+          canvas,
+          0.58
+        );
+      } finally {
+        bitmap.close();
+      }
+    } catch (error) {
+      console.info(
+        '[LiveNews] YouTube thumbnail archive unavailable; using metadata card.',
+        error
+      );
+
+      return null;
+    }
+  }
+
+  private escapeArchiveXml(
+    value: string
+  ): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  }
+
+  /**
+   * Guaranteed local fallback.
+   *
+   * Even when browser security prevents extracting a third-party video frame,
+   * this immutable SVG preserves the exact registration time, source,
+   * channel and source URL inside the evidence record.
+   */
+  private createMetadataArchiveCard(
+    channelName: string,
+    capturedAt: string,
+    playbackState: string,
+    sourceUrl: string | undefined
+  ): string {
+    const safeChannel =
+      this.escapeArchiveXml(channelName);
+
+    const safeTime =
+      this.escapeArchiveXml(capturedAt);
+
+    const safeState =
+      this.escapeArchiveXml(playbackState);
+
+    const safeUrl =
+      this.escapeArchiveXml(
+        sourceUrl || 'Source URL unavailable'
+      );
+
+    const svg = `
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="800"
+        height="450"
+        viewBox="0 0 800 450"
+      >
+        <rect width="800" height="450" fill="#07110d"/>
+        <rect
+          x="1"
+          y="1"
+          width="798"
+          height="448"
+          rx="18"
+          fill="none"
+          stroke="#1f7a4d"
+          stroke-width="2"
+        />
+
+        <circle cx="742" cy="54" r="7" fill="#34d399"/>
+        <text
+          x="720"
+          y="61"
+          text-anchor="end"
+          fill="#9de9c3"
+          font-family="Tahoma, Arial, sans-serif"
+          font-size="19"
+        >LIVE EVIDENCE</text>
+
+        <text
+          x="742"
+          y="135"
+          text-anchor="end"
+          fill="#ffffff"
+          font-family="Tahoma, Arial, sans-serif"
+          font-size="34"
+          font-weight="700"
+        >${safeChannel}</text>
+
+        <text
+          x="742"
+          y="190"
+          text-anchor="end"
+          fill="#b9d8c7"
+          font-family="Tahoma, Arial, sans-serif"
+          font-size="19"
+        >Archived at: ${safeTime}</text>
+
+        <text
+          x="742"
+          y="232"
+          text-anchor="end"
+          fill="#b9d8c7"
+          font-family="Tahoma, Arial, sans-serif"
+          font-size="19"
+        >State: ${safeState}</text>
+
+        <line
+          x1="58"
+          y1="274"
+          x2="742"
+          y2="274"
+          stroke="#1c3c2d"
+          stroke-width="1"
+        />
+
+        <text
+          x="742"
+          y="315"
+          text-anchor="end"
+          fill="#6ee7b7"
+          font-family="Tahoma, Arial, sans-serif"
+          font-size="16"
+        >Original source</text>
+
+        <foreignObject
+          x="58"
+          y="334"
+          width="684"
+          height="78"
+        >
+          <div
+            xmlns="http://www.w3.org/1999/xhtml"
+            style="
+              color:#aebfb6;
+              font-family:Tahoma,Arial,sans-serif;
+              font-size:14px;
+              line-height:1.5;
+              direction:ltr;
+              text-align:left;
+              word-break:break-all;
+            "
+          >${safeUrl}</div>
+        </foreignObject>
+      </svg>
+    `;
+
+    return (
+      'data:image/svg+xml;charset=utf-8,' +
+      encodeURIComponent(svg)
+    );
+  }
+
+  private async createLiveEvidenceArchive(
+    capturedAt: string,
+    sourceUrl: string | undefined,
+    playbackState: string
+  ) {
+    const channel = this.activeChannel;
+
+    const channelName =
+      this.getChannelDisplayName(channel);
+
+    const videoId =
+      channel.videoId ||
+      channel.fallbackVideoId;
+
+    let snapshotKind:
+      | 'video-frame'
+      | 'youtube-thumbnail'
+      | 'metadata-card' =
+      'metadata-card';
+
+    let snapshotDataUrl =
+      await this.captureNativeVideoFrame();
+
+    let note =
+      'فریم واقعی همان لحظه از ویدئوی بومی مرورگر ثبت شد.';
+
+    if (snapshotDataUrl) {
+      snapshotKind = 'video-frame';
+    } else {
+      snapshotDataUrl =
+        await this.captureYouTubeThumbnail(
+          videoId
+        );
+
+      if (snapshotDataUrl) {
+        snapshotKind =
+          'youtube-thumbnail';
+
+        note =
+          'به علت محدودیت امنیتی iframe یوتیوب، تصویر بندانگشتی همان Video ID آرشیو شد؛ این تصویر الزاماً فریم دقیق لحظه مشاهده نیست.';
+      } else {
+        snapshotKind =
+          'metadata-card';
+
+        snapshotDataUrl =
+          this.createMetadataArchiveCard(
+            channelName,
+            capturedAt,
+            playbackState,
+            sourceUrl
+          );
+
+        note =
+          'استخراج تصویر مستقیم توسط سیاست‌های امنیتی منبع/مرورگر ممکن نبود؛ کارت آرشیوی ثابت شامل زمان، منبع و نشانی جریان ذخیره شد.';
+      }
+    }
+
+    return {
+      archiveId:
+        this.makeEvidenceArchiveId(),
+
+      archivedAt:
+        capturedAt,
+
+      archiveVersion:
+        1 as const,
+
+      snapshotKind,
+
+      snapshotDataUrl,
+
+      mediaType:
+        'live-stream' as const,
+
+      channelId:
+        channel.id,
+
+      channelName,
+
+      videoId,
+
+      originalUrl:
+        sourceUrl,
+
+      streamUrl:
+        this.getActiveChannelStreamUrl(),
+
+      playbackState,
+
+      note,
+    };
+  }
+
+  private async addActiveChannelToAnalysis():
+    Promise<void> {
+    if (!this.canAddToAnalysis()) return;
+
+    const channelName =
+      this.getChannelDisplayName(
+        this.activeChannel
+      );
+
+    const playbackState =
+      this.isPlaying
+        ? 'در حال پخش'
+        : 'آماده پخش';
+
+    const capturedAt =
+      new Date().toISOString();
+
+    const sourceUrl =
+      this.getActiveChannelEvidenceUrl();
+
+    const previousText =
+      this.analysisBtn?.textContent || '';
+
+    if (this.analysisBtn) {
+      this.analysisBtn.disabled = true;
+      this.analysisBtn.textContent =
+        'در حال ثبت شاهد...';
+
+      this.analysisBtn.style.opacity =
+        '0.75';
+
+      this.analysisBtn.style.cursor =
+        'wait';
+    }
+
+    try {
+      const archive =
+        await this.createLiveEvidenceArchive(
+          capturedAt,
+          sourceUrl,
+          playbackState
+        );
+
+      openAnalysisWithEvidence({
+        kind: 'news',
+
+        title:
+          `پخش زنده ${channelName}`,
+
+        source:
+          channelName,
+
+        url:
+          sourceUrl,
+
+        timestamp:
+          capturedAt,
+
+        summary:
+          `شاهد خبری ثبت‌شده از پخش زنده ${channelName} در وضعیت «${playbackState}». ` +
+          `شناسه آرشیو: ${archive.archiveId}`,
+
+        archive,
+      });
+    } catch (error) {
+      console.error(
+        '[LiveNews] Failed to create archived live evidence:',
+        error
+      );
+
+      /*
+       * Archive failure must never block the analyst from registering evidence.
+       * We still send the source/time record.
+       */
+      openAnalysisWithEvidence({
+        kind: 'news',
+
+        title:
+          `پخش زنده ${channelName}`,
+
+        source:
+          channelName,
+
+        url:
+          sourceUrl,
+
+        timestamp:
+          capturedAt,
+
+        summary:
+          `شاهد خبری ثبت‌شده از پخش زنده ${channelName} در وضعیت «${playbackState}». ` +
+          'آرشیو تصویری در این ثبت در دسترس نبود.',
+      });
+    } finally {
+      if (this.analysisBtn) {
+        this.analysisBtn.disabled = false;
+        this.analysisBtn.textContent =
+          previousText || 'افزودن به تحلیل';
+
+        this.analysisBtn.style.opacity =
+          '1';
+
+        this.analysisBtn.style.cursor =
+          'pointer';
+      }
+    }
+  }
+
+  private updateAnalysisButtonContext(): void {
+    if (!this.analysisBtn) return;
+
+    const channelName =
+      this.getChannelDisplayName(this.activeChannel);
+
+    this.analysisBtn.title =
+      `افزودن پخش زنده ${channelName} به مرکز تحلیل`;
+
+    this.analysisBtn.setAttribute(
+      'aria-label',
+      `افزودن پخش زنده ${channelName} به تحلیل`
+    );
+  }
+
+  private createAnalysisButton(): void {
+    if (!this.canAddToAnalysis()) return;
+
+    this.analysisBtn = document.createElement('button');
+    this.analysisBtn.type = 'button';
+    this.analysisBtn.className =
+      'live-analysis-btn';
+
+    this.analysisBtn.textContent =
+      'افزودن به تحلیل';
+
+    this.analysisBtn.style.cssText = `
+      min-height: 30px;
+      margin-inline-start: 6px;
+      padding: 0 10px;
+
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+
+      border: 1px solid rgba(34, 197, 94, 0.72);
+      border-radius: 6px;
+
+      background: rgba(20, 83, 45, 0.88);
+      color: #ffffff;
+
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+
+      cursor: pointer;
+      white-space: nowrap;
+
+      transition:
+        background 0.15s ease,
+        border-color 0.15s ease,
+        transform 0.15s ease;
+    `;
+
+    this.analysisBtn.addEventListener(
+      'mouseenter',
+      () => {
+        if (!this.analysisBtn) return;
+
+        this.analysisBtn.style.background =
+          'rgba(22, 101, 52, 0.96)';
+
+        this.analysisBtn.style.borderColor =
+          '#4ade80';
+      }
+    );
+
+    this.analysisBtn.addEventListener(
+      'mouseleave',
+      () => {
+        if (!this.analysisBtn) return;
+
+        this.analysisBtn.style.background =
+          'rgba(20, 83, 45, 0.88)';
+
+        this.analysisBtn.style.borderColor =
+          'rgba(34, 197, 94, 0.72)';
+      }
+    );
+
+    this.analysisBtn.addEventListener(
+      'mousedown',
+      () => {
+        if (!this.analysisBtn) return;
+        this.analysisBtn.style.transform =
+          'translateY(1px)';
+      }
+    );
+
+    this.analysisBtn.addEventListener(
+      'mouseup',
+      () => {
+        if (!this.analysisBtn) return;
+        this.analysisBtn.style.transform =
+          'translateY(0)';
+      }
+    );
+
+    this.analysisBtn.addEventListener(
+      'mouseleave',
+      () => {
+        if (!this.analysisBtn) return;
+        this.analysisBtn.style.transform =
+          'translateY(0)';
+      }
+    );
+
+    this.analysisBtn.addEventListener(
+      'click',
+      (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        void this.addActiveChannelToAnalysis();
+      }
+    );
+
+    const header =
+      this.element.querySelector('.panel-header');
+
+    header?.appendChild(this.analysisBtn);
+
+    this.updateAnalysisButtonContext();
+  }
+
   private createLiveButton(): void {
     this.liveBtn = document.createElement('button');
     this.liveBtn.className = 'live-mute-btn';
@@ -864,6 +1633,7 @@ export class LiveNewsPanel extends Panel {
     header?.appendChild(this.muteBtn);
 
     this.createFullscreenButton();
+    this.createAnalysisButton();
   }
 
   private createFullscreenButton(): void {
@@ -1125,6 +1895,7 @@ export class LiveNewsPanel extends Panel {
     if (channel.id === this.activeChannel.id) return;
 
     this.activeChannel = channel;
+    this.updateAnalysisButtonContext();
     saveToStorage(STORAGE_KEYS.activeChannel, channel.id);
     const shouldStartMedia = this.hasPlaybackIntent();
     const hadLiveNewsOwnership = this.ownsLiveNewsMedia();
@@ -1795,6 +2566,7 @@ export class LiveNewsPanel extends Panel {
       void this.switchChannel(this.activeChannel);
     }
     this.refreshChannelSwitcher();
+    this.updateAnalysisButtonContext();
   }
 
   public stopLiveMediaForClose(): void {
@@ -1851,6 +2623,7 @@ export class LiveNewsPanel extends Panel {
     }
 
     this.playerContainer = null;
+    this.analysisBtn = null;
 
     super.destroy();
   }

@@ -62,6 +62,7 @@
     { "source": "/stocks/:symbol/", "destination": "/stocks/:symbol", "permanent": true }
   ],
   "rewrites": [
+    { "source": "/api/rasadyar-auth/:match*", "destination": "/api/rasadyar-auth?path=:match*" },
     { "source": "/robots.txt", "has": [{ "type": "host", "value": "^(?:tech|finance|commodity|happy|energy)\\.worldmonitor\\.app$" }], "destination": "/robots.variant.txt" },
     { "source": "/robots.txt", "has": [{ "type": "host", "value": "^api\\.worldmonitor\\.app$" }], "destination": "/robots.api.txt" },
     { "source": "/robots.txt", "destination": "/robots.www.txt" },

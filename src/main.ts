@@ -1,4 +1,6 @@
 import './styles/base-layer.css';
+import './styles/rasadyar-dashboard.css';
+import { installSystemSettingsRuntime } from "./auth/system-settings-runtime";
 import { installIranLocalePresentation } from './utils/iran-locale-presentation';
 import './bootstrap/zod-csp';
 import { SITE_VARIANT } from '@/config/variant';
@@ -11,6 +13,8 @@ import { registerLcpReporting } from '@/bootstrap/lcp-report';
 import { initVercelAnalytics } from '@/bootstrap/secondary-startup';
 import { loadVariantThemeStylesheet } from '@/bootstrap/variant-theme';
 import { App } from './App';
+import { requireLogin } from './auth/login-gate';
+import './auth/role-panel-manager';
 import { installUtmInterceptor } from './utils/utm';
 import { captureContentAttributionFromUrl } from '../shared/content-attribution';
 
@@ -44,6 +48,7 @@ function activateDeferredDashboardStyles(): void {
 
 activateDeferredDashboardStyles();
 installIranLocalePresentation();
+installSystemSettingsRuntime();
 installLcpAttributionDebug();
 
 // perf G — defer @sentry/browser off the critical path (#3994).
@@ -572,11 +577,14 @@ if (urlParams.get('settings') === '1') {
     }
   );
 } else {
-  installUtmInterceptor();
-  markLcpDebug('wm:boot:app-construct');
-  const app = new App('app');
-  app
-    .init()
+  if (!requireLogin()) {
+    // Login screen is rendered by the auth gate.
+  } else {
+    installUtmInterceptor();
+    markLcpDebug('wm:boot:app-construct');
+    const app = new App('app');
+    app
+      .init()
     .then(() => {
       clearChunkReloadGuard(chunkReloadStorageKey);
     })
@@ -593,6 +601,7 @@ if (urlParams.get('settings') === '1') {
         console.error('[App] Failed to clean up after initialization failure:', cleanupError);
       }
     });
+  }
 }
 
 // Debug helpers for geo-convergence testing (remove in production)

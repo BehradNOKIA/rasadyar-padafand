@@ -19,6 +19,7 @@ import {
 import { isAllowedDomain } from './api/_rss-allowed-domain-match.js';
 import { rssFetchHeadersForHost } from './api/_rss-fetch-headers.js';
 import { validateGeneratedRequest } from './server/request-validator';
+import { rasadyarAuthPlugin } from './server/rasadyar-auth/vite-plugin';
 
 // Env-dependent constants moved inside defineConfig function
 
@@ -937,6 +938,7 @@ export default defineConfig(({ mode }) => {
       rssProxyPlugin(),
       youtubeLivePlugin(),
       gpsjamDevPlugin(),
+      rasadyarAuthPlugin(),
       sebufApiPlugin(),
       brotliPrecompressPlugin(),
       VitePWA({

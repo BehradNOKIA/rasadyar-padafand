@@ -13,12 +13,12 @@ export interface VariantMeta {
 
 export const VARIANT_META: { full: VariantMeta; [k: string]: VariantMeta } = {
   full: {
-    title: 'World Monitor - Real-Time Global Intelligence Dashboard',
-    description: 'Real-time global intelligence platform tracking conflicts, markets, military activity, and OSINT signals across 190+ countries, with live context in one view.',
-    keywords: 'AI intelligence, AI-powered dashboard, global intelligence, geopolitical dashboard, world news, market data, military bases, nuclear facilities, undersea cables, conflict zones, real-time monitoring, situation awareness, OSINT, flight tracking, AIS ships, earthquake monitor, protest tracker, power outages, oil prices, government spending, polymarket predictions',
+    title: 'رصدیار پدافند — داشبورد هوشمند رصد و تحلیل',
+    description: 'سامانه هوشمند رصد، پایش و تحلیل داده‌ها و رویدادهای راهبردی',
+    keywords: 'رصدیار پدافند، پایش، تحلیل، اطلاعات متن‌باز، هوش مصنوعی',
     url: 'https://www.worldmonitor.app/dashboard',
-    siteName: 'World Monitor',
-    shortName: 'World Monitor',
+    siteName: 'رصدیار پدافند',
+    shortName: 'رصدیار پدافند',
     subject: 'AI-Powered Global Intelligence and Situation Awareness',
     classification: 'AI Intelligence Dashboard, OSINT Tool, News Aggregator',
     categories: ['news', 'productivity'],

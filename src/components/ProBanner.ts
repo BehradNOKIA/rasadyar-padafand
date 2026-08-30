@@ -215,7 +215,8 @@ export function showProBanner(container: HTMLElement): void {
   // free" and "initially premium then downgrade" trajectories.
   bannerContainer = container;
 
-  if (bannerEl && !bannerEl.isConnected) {
+  const currentBannerEl = bannerEl;
+  if (currentBannerEl?.isConnected === false) {
     bannerEl = null;
   }
   if (bannerEl) return;
@@ -289,10 +290,10 @@ export function showProBanner(container: HTMLElement): void {
 
   const slot = container.querySelector<HTMLElement>('#proBannerSlot');
   const header = container.querySelector('.header');
-  if (slot) {
-    slot.replaceChildren(banner);
-  } else if (header) {
-    header.before(banner);
+  if (slot !== null) {
+    slot?.replaceChildren(banner);
+  } else if (header !== null) {
+    header?.before(banner);
   } else {
     container.prepend(banner);
   }

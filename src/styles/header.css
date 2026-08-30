@@ -97,3 +97,6 @@ html.wm-pro-banner-reserved .pro-banner-slot {
 #authWidgetMount:empty {
   visibility: hidden;
 }
+
+
+.rasadyar-admin-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;justify-content:flex-start;direction:rtl}.rasadyar-admin-panel{width:420px;max-width:90vw;background:#111;color:white;padding:24px;height:100%;overflow:auto}.rasadyar-admin-panel input,.rasadyar-admin-panel select{display:block;width:100%;margin:8px 0;padding:10px}.rasadyar-admin-panel button{padding:10px;margin:5px;cursor:pointer}.rasadyar-user-row{padding:10px;border-bottom:1px solid #333}

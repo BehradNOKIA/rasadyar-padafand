@@ -1,0 +1,2320 @@
+/* =========================================================
+   RASADYAR PADAFAND
+   MAIN DASHBOARD VISUAL THEME
+
+   File:
+   src/styles/rasadyar-dashboard.css
+========================================================= */
+
+
+/* =========================================================
+   01. DESIGN TOKENS
+========================================================= */
+
+:root {
+    --rs-bg: #020806;
+
+    --rs-surface: #06110d;
+    --rs-surface-2: #081711;
+    --rs-surface-3: #0a1b14;
+
+    --rs-green: #22c55e;
+    --rs-green-bright: #34d399;
+    --rs-green-dark: #15803d;
+
+    --rs-green-soft: rgba(52, 211, 153, 0.12);
+
+    --rs-border: rgba(52, 211, 153, 0.18);
+    --rs-border-hover: rgba(52, 211, 153, 0.34);
+    --rs-border-soft: rgba(255, 255, 255, 0.06);
+
+    --rs-text: #f5fbf7;
+    --rs-muted: rgba(226, 238, 232, 0.56);
+    --rs-muted-2: rgba(226, 238, 232, 0.36);
+
+    --rs-sidebar-width: 176px;
+    --rs-sidebar-collapsed-width: 54px;
+    --rs-sidebar-current-width: var(--rs-sidebar-width);
+}
+
+
+html.rasadyar-sidebar-collapsed {
+    --rs-sidebar-current-width: var(--rs-sidebar-collapsed-width);
+}
+
+
+/* =========================================================
+   02. GLOBAL
+========================================================= */
+
+html,
+body {
+    background: var(--rs-bg) !important;
+
+    /* حذف کامل اسکرول افقی پایین صفحه */
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: clip !important;
+}
+
+html::-webkit-scrollbar:horizontal,
+body::-webkit-scrollbar:horizontal {
+    height: 0 !important;
+    display: none !important;
+}
+
+body {
+    color: var(--rs-text);
+
+    font-family:
+        "Vazirmatn Variable",
+        "Vazirmatn",
+        Tahoma,
+        Arial,
+        sans-serif !important;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+    font-family:
+        "Vazirmatn Variable",
+        "Vazirmatn",
+        Tahoma,
+        Arial,
+        sans-serif;
+}
+
+
+/* =========================================================
+   03. MAIN APPLICATION BACKGROUND
+========================================================= */
+
+.main-content {
+    box-sizing: border-box !important;
+
+    /*
+       کل محتوای داشبورد، شامل نقشه و نوار «جهانی»،
+       فضای سایدبار را رعایت می‌کند.
+    */
+    width:
+        calc(100% - var(--rs-sidebar-current-width)) !important;
+
+    max-width:
+        calc(100% - var(--rs-sidebar-current-width)) !important;
+
+    margin-right:
+        var(--rs-sidebar-current-width) !important;
+
+    overflow-x:
+        hidden !important;
+
+    background:
+        radial-gradient(
+            circle at 55% 20%,
+            rgba(34, 197, 94, 0.035),
+            transparent 32%
+        ),
+        radial-gradient(
+            circle at 25% 75%,
+            rgba(52, 211, 153, 0.025),
+            transparent 30%
+        ),
+        #020806 !important;
+
+    transition:
+        width 0.22s ease,
+        max-width 0.22s ease,
+        margin-right 0.22s ease;
+}
+
+
+/* =========================================================
+   04. PANELS GRID
+========================================================= */
+
+.panels-grid {
+    gap: 10px !important;
+}
+
+
+/* =========================================================
+   05. GENERAL PANELS
+========================================================= */
+
+.panel {
+    background:
+        linear-gradient(
+            180deg,
+            rgba(7, 20, 15, 0.96),
+            rgba(3, 11, 8, 0.97)
+        ) !important;
+
+    border:
+        1px solid var(--rs-border) !important;
+
+    border-radius: 12px !important;
+
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.025),
+        0 8px 24px rgba(0, 0, 0, 0.16) !important;
+
+    overflow: hidden;
+}
+
+.panel:hover {
+    border-color:
+        rgba(52, 211, 153, 0.25) !important;
+}
+
+
+/* =========================================================
+   06. PANEL HEADERS
+========================================================= */
+
+.panel-header {
+    color: var(--rs-text) !important;
+
+    background:
+        rgba(5, 18, 13, 0.42) !important;
+
+    border-bottom:
+        1px solid var(--rs-border-soft) !important;
+}
+
+
+/* =========================================================
+   07. SECONDARY TEXT
+========================================================= */
+
+.panel-subtitle,
+.muted,
+.secondary-text {
+    color: var(--rs-muted) !important;
+}
+
+
+/* =========================================================
+   08. MAIN TOP HEADER
+========================================================= */
+
+.header {
+    position: relative;
+
+    min-height: 66px;
+
+    color: #f5fbf7 !important;
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(5, 18, 13, 0.99),
+            rgba(2, 10, 7, 0.99)
+        ) !important;
+
+    border-bottom:
+        1px solid
+        rgba(52, 211, 153, 0.20) !important;
+
+    box-shadow:
+        0 8px 26px rgba(0, 0, 0, 0.28),
+        inset 0 -1px 0 rgba(52, 211, 153, 0.04) !important;
+
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
+
+/* =========================================================
+   09. HEADER FONT
+========================================================= */
+
+.header,
+.header * {
+    font-family:
+        "Vazirmatn Variable",
+        "Vazirmatn",
+        Tahoma,
+        Arial,
+        sans-serif;
+}
+
+
+/* =========================================================
+   10. HEADER RIGHT
+========================================================= */
+
+.header-right {
+    display: flex !important;
+
+    align-items: center !important;
+
+    gap: 7px !important;
+
+    min-height: 56px;
+
+    padding-left: 14px;
+
+    color: #f5fbf7;
+}
+
+
+/* =========================================================
+   11. RASADYAR LOGO
+========================================================= */
+
+.header .brand-logo {
+    display: block !important;
+
+    visibility: visible !important;
+    opacity: 1 !important;
+
+    flex: 0 0 46px;
+
+    width: 46px !important;
+    height: 46px !important;
+
+    min-width: 46px !important;
+    min-height: 46px !important;
+
+    max-width: 46px !important;
+    max-height: 46px !important;
+
+    object-fit: contain !important;
+    object-position: center;
+
+    margin: 0 1px 0 4px !important;
+    padding: 2px !important;
+
+    border: 0 !important;
+
+    background: transparent !important;
+
+    box-shadow: none !important;
+
+    filter:
+        drop-shadow(
+            0 0 6px rgba(52, 211, 153, 0.22)
+        );
+
+    transition:
+        filter 0.18s ease,
+        transform 0.18s ease;
+}
+
+.header .brand-logo:hover {
+    filter:
+        drop-shadow(
+            0 0 10px rgba(52, 211, 153, 0.40)
+        );
+
+    transform: scale(1.03);
+}
+
+
+/* =========================================================
+   12. RASADYAR TITLE
+========================================================= */
+
+.header .brand-logo + span {
+    position: relative;
+
+    display: inline-flex !important;
+
+    align-items: center;
+    justify-content: center;
+
+    min-height: 42px;
+
+    margin: 0 2px 0 0;
+
+    padding: 0 5px;
+
+    direction: rtl;
+
+    white-space: nowrap;
+
+    color: #ffffff !important;
+
+    font-size: 17px !important;
+
+    font-weight: 800 !important;
+
+    line-height: 1.2 !important;
+
+    letter-spacing: -0.5px;
+
+    border: 0 !important;
+
+    background: transparent !important;
+
+    box-shadow: none !important;
+}
+
+.header .brand-logo + span::after {
+    content: "";
+
+    position: absolute;
+
+    right: 6px;
+    left: 6px;
+
+    bottom: 4px;
+
+    height: 1px;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(52, 211, 153, 0.55),
+            transparent
+        );
+}
+
+
+/* =========================================================
+   13. REMOVE ORIGINAL HEADER CREDITS
+========================================================= */
+
+.header .credit-link,
+.header .github-link {
+    display: none !important;
+}
+
+
+/* =========================================================
+   14. LIVE STATUS
+========================================================= */
+
+.header .status-indicator {
+    display: inline-flex !important;
+
+    align-items: center;
+    justify-content: center;
+
+    gap: 6px;
+
+    min-height: 30px;
+
+    padding: 0 10px;
+
+    direction: rtl;
+
+    color:
+        rgba(210, 244, 225, 0.82) !important;
+
+    font-size: 10px;
+
+    font-weight: 600;
+
+    border:
+        1px solid rgba(52, 211, 153, 0.13);
+
+    border-radius: 8px;
+
+    background:
+        rgba(4, 21, 14, 0.72);
+
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.header .status-indicator .status-dot {
+    width: 7px;
+    height: 7px;
+
+    flex: 0 0 7px;
+
+    border-radius: 50%;
+
+    background:
+        var(--rs-green-bright) !important;
+
+    box-shadow:
+        0 0 7px rgba(52, 211, 153, 0.72);
+}
+
+
+/* =========================================================
+   15. REGION SELECTOR
+========================================================= */
+
+.header .region-selector {
+    min-width: 126px;
+    min-height: 32px;
+    height: 32px;
+
+    padding:
+        0 10px !important;
+
+    direction: rtl;
+    text-align: right;
+
+    color:
+        rgba(235, 248, 241, 0.86) !important;
+
+    font-size: 10px;
+    font-weight: 500;
+
+    background:
+        rgba(4, 21, 14, 0.72) !important;
+
+    border:
+        1px solid rgba(52, 211, 153, 0.13) !important;
+
+    border-radius: 8px !important;
+
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.02);
+
+    transition:
+        background 0.18s ease,
+        border-color 0.18s ease,
+        color 0.18s ease;
+}
+
+.header .region-selector:hover,
+.header .region-selector:focus {
+    color:
+        #ffffff !important;
+
+    background:
+        rgba(8, 36, 24, 0.82) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.26) !important;
+
+    outline:
+        none !important;
+}
+
+
+/* =========================================================
+   16. HEADER LEFT
+========================================================= */
+
+.header-left {
+    display: flex !important;
+
+    align-items: center !important;
+
+    gap: 7px !important;
+
+    min-height: 56px;
+
+    padding-right: 14px;
+}
+
+
+/* =========================================================
+   17. HEADER BUTTONS
+========================================================= */
+
+.header button,
+.header-left a,
+.header-left select {
+    min-height: 34px;
+
+    color:
+        rgba(235, 248, 241, 0.80) !important;
+
+    background:
+        rgba(5, 18, 13, 0.76) !important;
+
+    border:
+        1px solid rgba(52, 211, 153, 0.14) !important;
+
+    border-radius: 8px !important;
+
+    transition:
+        background 0.18s ease,
+        border-color 0.18s ease,
+        color 0.18s ease,
+        box-shadow 0.18s ease,
+        transform 0.18s ease;
+}
+
+.header button:hover,
+.header-left a:hover {
+    color: #ffffff !important;
+
+    background:
+        rgba(16, 70, 45, 0.45) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.34) !important;
+
+    box-shadow:
+        0 0 14px rgba(52, 211, 153, 0.08);
+
+    transform: translateY(-1px);
+}
+
+
+/* =========================================================
+   18. HEADER INPUTS
+========================================================= */
+
+.header input {
+    min-height: 34px;
+
+    color: #f5fbf7 !important;
+
+    background:
+        rgba(2, 10, 7, 0.72) !important;
+
+    border:
+        1px solid rgba(52, 211, 153, 0.15) !important;
+
+    border-radius: 9px !important;
+}
+
+.header input:focus {
+    outline: none !important;
+
+    background:
+        rgba(4, 18, 12, 0.90) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.48) !important;
+
+    box-shadow:
+        0 0 0 3px rgba(52, 211, 153, 0.07) !important;
+}
+
+
+/* =========================================================
+   19. DASHBOARD RIGHT SIDEBAR
+========================================================= */
+
+.dashboard-tabs-bar {
+    /* عرض 176/54 پیکسل شامل padding و border باشد */
+    box-sizing: border-box !important;
+
+    position: fixed !important;
+
+    /*
+       Docked to the application frame:
+       40px reserved top slot + 66px application header.
+       This keeps the rail below the header instead of floating over it.
+    */
+    top: 106px !important;
+    right: 0 !important;
+    bottom: 48px !important;
+    left: auto !important;
+
+    z-index: 900 !important;
+
+    width: var(--rs-sidebar-width) !important;
+
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+
+    gap: 5px !important;
+
+    padding: 8px 7px !important;
+
+    direction: rtl;
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(3, 15, 10, 0.995),
+            rgba(2, 10, 7, 0.995)
+        ) !important;
+
+    /*
+       No floating-card frame. The left separator makes the rail feel like
+       part of the dashboard shell.
+    */
+    border: 0 !important;
+    border-left:
+        1px solid rgba(52, 211, 153, 0.16) !important;
+
+    border-radius: 0 !important;
+
+    box-shadow:
+        inset 1px 0 0 rgba(255, 255, 255, 0.012) !important;
+
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+
+    transition:
+        width 0.22s ease,
+        padding 0.22s ease,
+        background 0.22s ease;
+}
+
+
+/* =========================================================
+   20. SIDEBAR HEADER / COLLAPSE BUTTON
+========================================================= */
+
+.rasadyar-sidebar-header {
+    min-height: 40px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 8px;
+
+    padding: 0 2px 7px;
+
+    border-bottom:
+        1px solid rgba(52, 211, 153, 0.08);
+}
+
+.rasadyar-sidebar-title {
+    overflow: hidden;
+
+    color:
+        rgba(236, 252, 244, 0.78);
+
+    font-size: 11px;
+    font-weight: 700;
+
+    white-space: nowrap;
+}
+
+.rasadyar-sidebar-toggle {
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    min-height: 30px !important;
+
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+
+    padding: 0 !important;
+
+    color:
+        rgba(110, 231, 183, 0.92) !important;
+
+    font-size: 22px !important;
+    line-height: 1 !important;
+
+    background:
+        rgba(52, 211, 153, 0.035) !important;
+
+    border:
+        1px solid rgba(52, 211, 153, 0.13) !important;
+
+    border-radius: 6px !important;
+
+    cursor: pointer;
+}
+
+.rasadyar-sidebar-toggle:hover {
+    color: #ffffff !important;
+
+    background:
+        rgba(52, 211, 153, 0.12) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.38) !important;
+}
+
+
+/* =========================================================
+   21. TAB LIST
+========================================================= */
+
+.dashboard-tablist {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+
+    position: static !important;
+
+    flex: 1 1 auto;
+
+    width: 100% !important;
+    min-height: 0 !important;
+
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+
+    gap: 7px !important;
+
+    padding: 0 !important;
+    margin: 0 !important;
+
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+
+    background: transparent !important;
+
+    border: 0 !important;
+    border-radius: 0 !important;
+
+    box-shadow: none !important;
+}
+
+.dashboard-tab {
+    display: flex !important;
+
+    width: 100% !important;
+    min-height: 43px;
+
+    margin: 0 !important;
+    padding: 0 !important;
+
+    border: 0 !important;
+
+    background: transparent !important;
+}
+
+.dashboard-tab.rasadyar-primary-workspace-tab[hidden],
+.rasadyar-primary-workspace-tab[hidden],
+.dashboard-tab[hidden] {
+    display: none !important;
+}
+
+
+.dashboard-tabs-bar::-webkit-scrollbar,
+.dashboard-tablist::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+    display: none !important;
+}
+
+
+/* =========================================================
+   22. NAVIGATION BUTTONS
+========================================================= */
+
+.dashboard-tab-label {
+    position: relative;
+
+    width: 100% !important;
+    min-height: 43px !important;
+
+    display: flex !important;
+
+    align-items: center !important;
+    justify-content: flex-start !important;
+
+    gap: 9px;
+
+    padding: 0 12px !important;
+
+    direction: rtl;
+
+    text-align: right !important;
+
+    color:
+        rgba(224, 240, 232, 0.68) !important;
+
+    font-size: 12px !important;
+    font-weight: 500 !important;
+
+    white-space: nowrap;
+
+    border:
+        1px solid transparent !important;
+
+    border-radius: 6px !important;
+
+    background: transparent !important;
+
+    box-shadow: none !important;
+
+    transition:
+        color 0.18s ease,
+        background 0.18s ease,
+        border-color 0.18s ease;
+}
+
+.dashboard-tab-label::before {
+    content: "▦";
+
+    display: inline-flex;
+
+    align-items: center;
+    justify-content: center;
+
+    width: 22px;
+    height: 22px;
+
+    flex: 0 0 22px;
+
+    color:
+        rgba(52, 211, 153, 0.70);
+
+    font-size: 17px;
+    line-height: 1;
+}
+
+/* آیکون‌های SVG اختصاصی منوی رصدیار */
+.rasadyar-nav-button::before {
+    display: none !important;
+    content: none !important;
+}
+
+.rasadyar-nav-icon {
+    width: 21px;
+    height: 21px;
+
+    flex: 0 0 21px;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    color:
+        rgba(52, 211, 153, 0.72);
+
+    transition:
+        color 0.18s ease,
+        filter 0.18s ease,
+        transform 0.18s ease;
+}
+
+.rasadyar-nav-icon svg {
+    width: 20px;
+    height: 20px;
+
+    display: block;
+
+    fill: none;
+
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+
+    vector-effect: non-scaling-stroke;
+}
+
+.rasadyar-nav-label {
+    min-width: 0;
+
+    display: inline-block;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    transition:
+        opacity 0.16s ease,
+        width 0.20s ease;
+}
+
+.rasadyar-nav-button:hover .rasadyar-nav-icon {
+    color: #6ee7b7;
+
+    filter:
+        drop-shadow(0 0 5px rgba(52, 211, 153, 0.28));
+
+    transform:
+        translateX(-1px);
+}
+
+.dashboard-tab.active .rasadyar-nav-icon {
+    color: #6ee7b7;
+
+    filter:
+        drop-shadow(0 0 6px rgba(52, 211, 153, 0.32));
+}
+
+.dashboard-tab-label:hover {
+    color: #ffffff !important;
+
+    background:
+        rgba(52, 211, 153, 0.06) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.14) !important;
+}
+
+
+/* =========================================================
+   23. ACTIVE NAVIGATION ITEM
+========================================================= */
+
+.dashboard-tab.active .dashboard-tab-label {
+    color: #ffffff !important;
+
+    font-weight: 700 !important;
+
+    background:
+        linear-gradient(
+            90deg,
+            rgba(52, 211, 153, 0.11),
+            rgba(52, 211, 153, 0.035)
+        ) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.16) !important;
+
+    box-shadow:
+        inset 3px 0 0 rgba(52, 211, 153, 0.58) !important;
+}
+
+.dashboard-tab.active .dashboard-tab-label::before {
+    color: #6ee7b7;
+}
+
+.dashboard-tab.active .dashboard-tab-label::after {
+    display: none !important;
+}
+
+
+/* =========================================================
+   24. ADD BUTTON / STATUS / COLLAPSED STATE
+========================================================= */
+
+.dashboard-tab-add {
+    width: 100% !important;
+    min-height: 36px !important;
+
+    margin: 0 !important;
+    padding: 0 !important;
+
+    flex: 0 0 auto;
+
+    color:
+        rgba(52, 211, 153, 0.72) !important;
+
+    background:
+        rgba(52, 211, 153, 0.035) !important;
+
+    border:
+        1px dashed rgba(52, 211, 153, 0.18) !important;
+
+    border-radius: 9px !important;
+}
+
+.dashboard-tab-add:hover {
+    color: #ffffff !important;
+
+    background:
+        rgba(52, 211, 153, 0.08) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.34) !important;
+}
+
+.rasadyar-sidebar-status {
+    min-height: 34px;
+
+    flex: 0 0 auto;
+
+    display: flex;
+    align-items: center;
+
+    gap: 7px;
+
+    padding: 8px 6px 0;
+
+    color:
+        rgba(52, 211, 153, 0.72);
+
+    font-size: 10px;
+    font-weight: 500;
+
+    border-top:
+        1px solid rgba(52, 211, 153, 0.10);
+}
+
+.rasadyar-sidebar-status-dot {
+    width: 6px;
+    height: 6px;
+
+    flex: 0 0 6px;
+
+    border-radius: 50%;
+
+    background: var(--rs-green-bright);
+
+    box-shadow:
+        0 0 8px rgba(52, 211, 153, 0.72);
+}
+
+
+/* حالت جمع‌شده */
+.dashboard-tabs-bar.rasadyar-sidebar-collapsed {
+    width: 54px !important;
+
+    padding:
+        8px 5px !important;
+
+    border-radius:
+        0 !important;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-sidebar-header {
+    justify-content: center;
+
+    padding:
+        0 0 8px;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-sidebar-title {
+    display: none;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-sidebar-toggle {
+    width: 34px !important;
+    min-width: 34px !important;
+}
+
+.rasadyar-sidebar-collapsed .dashboard-tablist {
+    gap: 6px !important;
+}
+
+.rasadyar-sidebar-collapsed .dashboard-tab {
+    min-height: 42px;
+}
+
+.rasadyar-sidebar-collapsed .dashboard-tab-label {
+    min-height: 42px !important;
+
+    justify-content: center !important;
+
+    gap: 0;
+
+    padding: 0 !important;
+
+    overflow: hidden;
+
+    font-size: 0 !important;
+}
+
+.rasadyar-sidebar-collapsed .dashboard-tab-label::before {
+    width: 26px;
+    height: 26px;
+
+    flex-basis: 26px;
+
+    margin: 0;
+
+    font-size: 18px !important;
+}
+
+.rasadyar-sidebar-collapsed .dashboard-tab.active .dashboard-tab-label::after {
+    right: 1px;
+
+    top: 8px;
+    bottom: 8px;
+}
+
+.rasadyar-sidebar-collapsed .dashboard-tab-add {
+    width: 38px !important;
+    min-width: 38px !important;
+
+    align-self: center;
+
+    font-size: 18px !important;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-sidebar-status {
+    justify-content: center;
+
+    padding:
+        8px 0 0;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-sidebar-status-text {
+    display: none;
+}
+
+
+/* فضای سایدبار توسط .main-content مدیریت می‌شود */
+#panelsGrid {
+    box-sizing: border-box !important;
+
+    width: 100% !important;
+    max-width: 100% !important;
+
+    margin-right: 0 !important;
+
+    overflow-x: hidden !important;
+}
+
+.panels-grid {
+    box-sizing: border-box;
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+}
+
+
+
+/* =========================================================
+   24.1 DOCKED SIDEBAR INTEGRATION POLISH
+========================================================= */
+
+/* The rail should visually continue the dashboard shell. */
+.dashboard-tabs-bar::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -1px;
+    width: 1px;
+    pointer-events: none;
+    background:
+        linear-gradient(
+            180deg,
+            transparent,
+            rgba(52, 211, 153, 0.18) 8%,
+            rgba(52, 211, 153, 0.10) 88%,
+            transparent
+        );
+}
+
+/* No isolated-card glow around the rail. */
+.dashboard-tabs-bar,
+.dashboard-tabs-bar:hover {
+    filter: none !important;
+}
+
+/* Keep icons quiet until interaction. */
+.rasadyar-sidebar-collapsed .dashboard-tab-label {
+    border-color: transparent !important;
+    background: transparent !important;
+}
+
+.rasadyar-sidebar-collapsed .dashboard-tab.active .dashboard-tab-label {
+    background:
+        rgba(52, 211, 153, 0.08) !important;
+    border-color:
+        rgba(52, 211, 153, 0.12) !important;
+    box-shadow: none !important;
+}
+
+/* In collapsed mode the toggle aligns as the first rail tool, not a card. */
+.rasadyar-sidebar-collapsed .rasadyar-sidebar-toggle {
+    background: transparent !important;
+    border-color: transparent !important;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-sidebar-toggle:hover {
+    background:
+        rgba(52, 211, 153, 0.07) !important;
+    border-color:
+        rgba(52, 211, 153, 0.12) !important;
+}
+
+/* =========================================================
+   24.2 HORIZONTAL OVERFLOW GUARD
+========================================================= */
+
+#app,
+.app,
+.app-shell,
+.dashboard,
+.dashboard-content,
+.main-content,
+#panelsGrid,
+.panels-grid {
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+}
+
+#app::-webkit-scrollbar:horizontal,
+.app::-webkit-scrollbar:horizontal,
+.app-shell::-webkit-scrollbar:horizontal,
+.dashboard::-webkit-scrollbar:horizontal,
+.dashboard-content::-webkit-scrollbar:horizontal,
+.main-content::-webkit-scrollbar:horizontal,
+#panelsGrid::-webkit-scrollbar:horizontal,
+.panels-grid::-webkit-scrollbar:horizontal {
+    height: 0 !important;
+    display: none !important;
+}
+
+
+
+.rasadyar-sidebar-collapsed .rasadyar-nav-button {
+    justify-content: center !important;
+
+    padding: 0 !important;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-nav-label {
+    display: none !important;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-nav-icon {
+    width: 24px;
+    height: 24px;
+
+    flex-basis: 24px;
+
+    margin: 0 !important;
+}
+
+.rasadyar-sidebar-collapsed .rasadyar-nav-icon svg {
+    width: 21px;
+    height: 21px;
+}
+
+
+/* =========================================================
+   25. REMOVE DISCORD UI
+========================================================= */
+
+a[href*="discord.gg"],
+a[href*="discord.com/invite"],
+a[href*="discordapp.com"],
+.discord-cta,
+.discord-banner,
+.discord-community,
+.discord-button,
+.discord-widget,
+.discord-float,
+[class*="discord-cta"],
+[class*="discord-float"],
+[class*="discord-banner"],
+[class*="discord-community"] {
+    display: none !important;
+}
+
+
+/* =========================================================
+   26. RASADYAR FOOTER
+========================================================= */
+
+.site-footer {
+    position:
+        relative !important;
+
+    min-height:
+        48px !important;
+
+    display:
+        flex !important;
+
+    align-items:
+        center !important;
+
+    justify-content:
+        space-between !important;
+
+    padding:
+        0 22px !important;
+
+    direction:
+        rtl;
+
+    color:
+        rgba(221, 237, 229, 0.54) !important;
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(4, 15, 10, 0.98),
+            rgba(2, 9, 6, 0.99)
+        ) !important;
+
+    border-top:
+        1px solid
+        rgba(52, 211, 153, 0.16) !important;
+}
+
+.site-footer > * {
+    display:
+        none !important;
+}
+
+.site-footer::before {
+    content:
+        "© 2026 رصدیار پدافند — طراحی و توسعه: دانشکده و پژوهشکده پدافند غیرعامل دانشگاه جامع امام حسین (ع)";
+
+    color:
+        rgba(226, 242, 234, 0.62);
+
+    font-size:
+        11px;
+}
+
+.site-footer::after {
+    content:
+        "v2.10.0";
+
+    min-height:
+        26px;
+
+    display:
+        inline-flex;
+
+    align-items:
+        center;
+
+    padding:
+        0 9px;
+
+    color:
+        rgba(167, 243, 208, 0.55);
+
+    font-size:
+        10px;
+
+    border:
+        1px solid
+        rgba(52, 211, 153, 0.12);
+
+    border-radius:
+        999px;
+
+    background:
+        rgba(7, 28, 18, 0.46);
+}
+
+
+/* =========================================================
+   27. FOCUS
+========================================================= */
+
+button,
+select,
+input {
+    outline-color:
+        rgba(52, 211, 153, 0.42);
+}
+
+
+/* =========================================================
+   28. SCROLLBARS
+========================================================= */
+
+::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+}
+
+::-webkit-scrollbar-track {
+    background: #020806;
+}
+
+::-webkit-scrollbar-thumb {
+    background:
+        rgba(52, 211, 153, 0.22);
+
+    border-radius:
+        20px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background:
+        rgba(52, 211, 153, 0.38);
+}
+
+
+/* =========================================================
+   29. RESPONSIVE
+========================================================= */
+
+@media (max-width: 1150px) {
+
+    .dashboard-tabs-bar {
+        position: relative !important;
+
+        top: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        left: auto !important;
+
+        width: 100% !important;
+
+        flex-direction: row !important;
+
+        align-items: center !important;
+
+        padding: 6px 10px !important;
+
+        border-radius: 0 !important;
+    }
+
+    .rasadyar-sidebar-header {
+        display: none !important;
+    }
+
+    .dashboard-tablist {
+        flex-direction: row !important;
+
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+    }
+
+    .dashboard-tab {
+        width: auto !important;
+    }
+
+    .dashboard-tab-label {
+        width: auto !important;
+
+        min-width: 90px;
+    }
+
+    .dashboard-tab-add {
+        width: 38px !important;
+        min-width: 38px !important;
+    }
+
+    .rasadyar-sidebar-status {
+        display: none !important;
+    }
+
+    .main-content,
+    html.rasadyar-sidebar-collapsed .main-content {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-right: 0 !important;
+    }
+
+    #panelsGrid,
+    html.rasadyar-sidebar-collapsed #panelsGrid {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-right: 0 !important;
+    }
+}
+
+
+@media (max-width: 900px) {
+
+    .header .brand-logo {
+        width: 40px !important;
+        height: 40px !important;
+
+        min-width: 40px !important;
+        min-height: 40px !important;
+
+        max-width: 40px !important;
+        max-height: 40px !important;
+    }
+
+    .header .brand-logo + span {
+        font-size: 14px !important;
+    }
+
+    .header .version,
+    .header .version-text,
+    .header .app-version {
+        display: none !important;
+    }
+
+    .site-footer::before {
+        content: "© 2026 رصدیار پدافند";
+
+        font-size: 10px;
+    }
+}
+
+
+/* =========================================================
+   RASADYAR NAVIGATION FEEDBACK
+========================================================= */
+
+/* Briefly highlight the real dashboard target selected from the sidebar. */
+.rasadyar-nav-focus {
+    position: relative;
+
+    outline:
+        1px solid rgba(52, 211, 153, 0.46) !important;
+
+    outline-offset:
+        -1px;
+
+    box-shadow:
+        inset 0 0 0 1px rgba(52, 211, 153, 0.10),
+        0 0 22px rgba(52, 211, 153, 0.10) !important;
+
+    transition:
+        outline-color 0.20s ease,
+        box-shadow 0.20s ease;
+}
+
+
+/* Small non-blocking status message for permission/fallback feedback. */
+.rasadyar-nav-toast {
+    position: fixed;
+
+    right:
+        calc(var(--rs-sidebar-current-width, 54px) + 14px);
+
+    bottom:
+        66px;
+
+    z-index:
+        2147483000;
+
+    max-width:
+        min(420px, calc(100vw - 90px));
+
+    padding:
+        10px 14px;
+
+    direction:
+        rtl;
+
+    color:
+        rgba(240, 253, 246, 0.94);
+
+    font-size:
+        12px;
+
+    font-weight:
+        500;
+
+    line-height:
+        1.8;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(6, 30, 20, 0.98),
+            rgba(2, 14, 9, 0.98)
+        );
+
+    border:
+        1px solid rgba(52, 211, 153, 0.24);
+
+    border-radius:
+        9px;
+
+    box-shadow:
+        0 14px 34px rgba(0, 0, 0, 0.34);
+
+    opacity:
+        0;
+
+    transform:
+        translateY(7px);
+
+    pointer-events:
+        none;
+
+    transition:
+        opacity 0.20s ease,
+        transform 0.20s ease;
+}
+
+.rasadyar-nav-toast.show {
+    opacity:
+        1;
+
+    transform:
+        translateY(0);
+}
+
+
+@media (max-width: 1150px) {
+    .rasadyar-nav-toast {
+        right:
+            14px;
+
+        bottom:
+            64px;
+    }
+}
+
+
+/* =========================================================
+   REMOVE LEGACY INTEL / FINDINGS BADGE FROM HEADER
+========================================================= */
+
+/*
+   The small legacy "0 + target" badge belongs to the original
+   WorldMonitor findings/intelligence UI. Rasadyar now uses its
+   own sidebar/navigation, so this header badge is intentionally
+   removed to keep the account area clean.
+*/
+.header .intel-findings-badge,
+.header-right > .intel-findings-badge,
+.header-left > .intel-findings-badge,
+.intel-findings-badge,
+[class*="intel-findings-badge"] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+
+    margin: 0 !important;
+    padding: 0 !important;
+
+    border: 0 !important;
+
+    overflow: hidden !important;
+    pointer-events: none !important;
+}
+
+/* Remove any reserved slot width left by the original header CSS. */
+.header-right,
+.header-left {
+    --header-findings-slot-width: 0px !important;
+}
+
+/* Keep the user/account area aligned after removing the badge. */
+.header-right {
+    padding-left: 14px !important;
+}
+
+.header-left {
+    padding-right: 14px !important;
+}
+
+
+/* =========================================================
+   RASADYAR ACCOUNT AREA — ALIGNMENT & SPACING FIX
+========================================================= */
+
+/*
+   The original header reserves a fixed auth slot. We use that space
+   deliberately so the user name/role no longer look cramped while a large
+   blank area remains beside them.
+*/
+.header-right {
+    --header-auth-slot-width: 236px !important;
+    --header-findings-slot-width: 0px !important;
+
+    padding-left: 4px !important;
+}
+
+.header .auth-header-widget,
+.header-right .auth-header-widget {
+    position: relative;
+
+    flex: 0 0 236px !important;
+
+    width: 236px !important;
+    min-width: 236px !important;
+    max-width: 236px !important;
+
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.auth-user-menu-wrapper {
+    position: relative;
+
+    width: 100%;
+    min-width: 0;
+}
+
+
+/* Main user/account button */
+.auth-user-dropdown-btn {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 40px !important;
+
+    display: grid !important;
+
+    grid-template-columns:
+        minmax(0, 1fr)
+        auto
+        14px;
+
+    align-items: center !important;
+
+    column-gap: 10px !important;
+
+    padding:
+        0 12px !important;
+
+    direction: rtl;
+
+    text-align: right !important;
+
+    color:
+        rgba(244, 252, 248, 0.94) !important;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(8, 34, 23, 0.78),
+            rgba(3, 17, 11, 0.90)
+        ) !important;
+
+    border:
+        1px solid rgba(52, 211, 153, 0.20) !important;
+
+    border-radius:
+        9px !important;
+
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.025);
+
+    overflow: hidden;
+}
+
+.auth-user-dropdown-btn:hover {
+    background:
+        linear-gradient(
+            135deg,
+            rgba(11, 48, 31, 0.86),
+            rgba(4, 22, 14, 0.94)
+        ) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.34) !important;
+}
+
+
+/* User name uses the available blank space instead of being squeezed */
+.auth-user-name {
+    min-width: 0;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    color:
+        #ffffff;
+
+    font-size:
+        12px;
+
+    font-weight:
+        700;
+
+    line-height:
+        1.2;
+}
+
+
+/* Role becomes a separate compact badge */
+.auth-user-role {
+    display: inline-flex;
+
+    align-items: center;
+    justify-content: center;
+
+    min-height: 22px;
+
+    padding:
+        0 7px;
+
+    white-space: nowrap;
+
+    color:
+        rgba(167, 243, 208, 0.88);
+
+    font-size:
+        10px;
+
+    font-weight:
+        600;
+
+    background:
+        rgba(52, 211, 153, 0.07);
+
+    border:
+        1px solid rgba(52, 211, 153, 0.13);
+
+    border-radius:
+        999px;
+}
+
+
+.auth-user-chevron {
+    display: inline-flex;
+
+    align-items: center;
+    justify-content: center;
+
+    width: 14px;
+
+    color:
+        rgba(167, 243, 208, 0.68);
+
+    font-size:
+        10px;
+
+    transition:
+        transform 0.18s ease,
+        color 0.18s ease;
+}
+
+.auth-user-dropdown-btn[aria-expanded="true"] .auth-user-chevron {
+    color:
+        #6ee7b7;
+
+    transform:
+        rotate(180deg);
+}
+
+
+/* =========================================================
+   ACCOUNT DROPDOWN
+========================================================= */
+
+.auth-user-dropdown {
+    position: absolute;
+
+    top:
+        calc(100% + 8px);
+
+    right: 0;
+
+    z-index:
+        1400;
+
+    width:
+        236px;
+
+    padding:
+        8px;
+
+    direction:
+        rtl;
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(4, 20, 13, 0.995),
+            rgba(2, 11, 7, 0.995)
+        );
+
+    border:
+        1px solid rgba(52, 211, 153, 0.18);
+
+    border-radius:
+        10px;
+
+    box-shadow:
+        0 18px 38px rgba(0, 0, 0, 0.34);
+
+    backdrop-filter:
+        blur(18px);
+
+    -webkit-backdrop-filter:
+        blur(18px);
+}
+
+.auth-user-dropdown.hidden {
+    display: none !important;
+}
+
+
+.auth-user-dropdown-header {
+    padding:
+        7px 8px 8px;
+}
+
+.auth-user-dropdown-name {
+    color:
+        #ffffff;
+
+    font-size:
+        12px;
+
+    font-weight:
+        700;
+}
+
+.auth-user-dropdown-role {
+    margin-top:
+        3px;
+
+    color:
+        rgba(167, 243, 208, 0.60);
+
+    font-size:
+        10px;
+}
+
+
+.auth-user-dropdown-divider {
+    height:
+        1px;
+
+    margin:
+        5px 2px;
+
+    background:
+        rgba(52, 211, 153, 0.10);
+}
+
+
+.auth-menu-item {
+    width:
+        100%;
+
+    min-height:
+        36px !important;
+
+    display:
+        flex !important;
+
+    align-items:
+        center;
+
+    justify-content:
+        flex-start;
+
+    padding:
+        0 10px !important;
+
+    direction:
+        rtl;
+
+    text-align:
+        right !important;
+
+    color:
+        rgba(229, 243, 235, 0.82) !important;
+
+    font-size:
+        11px !important;
+
+    font-weight:
+        500 !important;
+
+    background:
+        transparent !important;
+
+    border:
+        1px solid transparent !important;
+
+    border-radius:
+        7px !important;
+
+    box-shadow:
+        none !important;
+}
+
+.auth-menu-item:hover {
+    color:
+        #ffffff !important;
+
+    background:
+        rgba(52, 211, 153, 0.07) !important;
+
+    border-color:
+        rgba(52, 211, 153, 0.12) !important;
+
+    transform:
+        none !important;
+}
+
+
+.auth-menu-item-danger {
+    color:
+        rgba(248, 180, 180, 0.82) !important;
+}
+
+.auth-menu-item-danger:hover {
+    color:
+        #fecaca !important;
+
+    background:
+        rgba(239, 68, 68, 0.06) !important;
+
+    border-color:
+        rgba(239, 68, 68, 0.12) !important;
+}
+
+
+/* =========================================================
+   ACCOUNT RESPONSIVE
+========================================================= */
+
+@media (max-width: 1250px) {
+    .header-right {
+        --header-auth-slot-width: 190px !important;
+    }
+
+    .header .auth-header-widget,
+    .header-right .auth-header-widget {
+        flex-basis: 190px !important;
+
+        width: 190px !important;
+        min-width: 190px !important;
+        max-width: 190px !important;
+    }
+
+    .auth-user-dropdown {
+        width: 210px;
+    }
+
+    .auth-user-role {
+        font-size: 9px;
+        padding: 0 6px;
+    }
+}
+
+
+@media (max-width: 980px) {
+    .header-right {
+        --header-auth-slot-width: 160px !important;
+    }
+
+    .header .auth-header-widget,
+    .header-right .auth-header-widget {
+        flex-basis: 160px !important;
+
+        width: 160px !important;
+        min-width: 160px !important;
+        max-width: 160px !important;
+    }
+
+    .auth-user-dropdown-btn {
+        grid-template-columns:
+            minmax(0, 1fr)
+            14px;
+    }
+
+    .auth-user-role {
+        display: none;
+    }
+}
+
+
+/* =========================================================
+   STEP 4B — HIDE DUPLICATE SETTINGS CONTROL IN HEADER
+   فقط دکمه تنظیمات داخل هدر پنهان می‌شود.
+   تنظیمات سایدبار و منطق داخلی سامانه دست‌نخورده می‌ماند.
+========================================================= */
+
+.header #mobileSettingsBtn,
+.header .mobile-settings-btn,
+.header .settings-btn,
+.header [data-action="settings"],
+.header button[title*="تنظیم"],
+.header button[aria-label*="تنظیم"],
+.header button[title*="Settings"],
+.header button[aria-label*="Settings"] {
+    display: none !important;
+}
+
+
+/* =========================================================
+   STEP 5B — HIDE MISSION PRESET MOUNT (EXACT)
+   عنصر واقعی MISSION در panel-layout.ts:
+   <span id="missionPresetMount" class="mission-preset-mount"></span>
+========================================================= */
+
+.header #missionPresetMount,
+.header .mission-preset-mount {
+    display: none !important;
+}
+
+
+/* =========================================================
+   STEP 6 — HIDE COPY LINK / EMBED BUTTONS
+   عناصر واقعی در panel-layout.ts:
+   #copyLinkBtn
+   #embedLinkBtn
+========================================================= */
+
+.header #copyLinkBtn,
+.header #embedLinkBtn {
+    display: none !important;
+}
+
+
+/* =========================================================
+   STEP 7 — HIDE LEGACY VARIANT SWITCHER
+   فقط نوار انتخاب نسخه‌های WorldMonitor / Tech / Energy / ...
+   در هدر پنهان می‌شود.
+========================================================= */
+
+.header .variant-switcher,
+.header [class~="variant-switcher"] {
+    display: none !important;
+}
+
+
+/* =========================================================
+   STEP 8 — HIDE DUPLICATE VERSION IN HEADER
+   نسخه در فوتر باقی می‌ماند؛ فقط v2.10.0 هدر پنهان می‌شود.
+========================================================= */
+
+.header .version,
+.header .version-text,
+.header .app-version {
+    display: none !important;
+}
+
+
+/* =========================================================
+   STEP 10C — FINAL VERTICAL DASHBOARD SCROLL
+   ---------------------------------------------------------
+   هدف رصدیار:
+   - نقشه در بالای داشبورد باشد.
+   - پنل‌ها زیر نقشه قرار بگیرند.
+   - کل صفحه یک اسکرول عمودی واحد داشته باشد.
+   - در نمایشگرهای دسکتاپ، حالت Split Layout اصلی WorldMonitor
+     (نقشه کنار پنل‌ها با اسکرول مستقل پنل‌ها) غیرفعال شود.
+   - Pin نقشه نیز غیرفعال شود تا پنل‌ها زیر نقشه حرکت نکنند.
+========================================================= */
+
+
+/* ---------------------------------------------------------
+   1) رفتار عمومی: نقشه هیچ‌وقت Sticky/Pinned نباشد
+--------------------------------------------------------- */
+
+.main-content .map-section,
+.main-content .map-section.pinned,
+#mapSection,
+#mapSection.pinned {
+    position: relative !important;
+
+    top: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: auto !important;
+
+    z-index: 1 !important;
+}
+
+
+/* دکمه Pin دیگر در مدل ناوبری رصدیار کاربرد ندارد. */
+#mapPinBtn {
+    display: none !important;
+}
+
+
+/* ---------------------------------------------------------
+   2) دسکتاپ: حذف Split Layout اصلی WorldMonitor
+   WorldMonitor از عرض 900px به بالا نقشه و پنل‌ها را
+   کنار هم قرار می‌دهد. رصدیار عمداً آن را به چیدمان
+   عمودی بازمی‌گرداند.
+--------------------------------------------------------- */
+
+@media (min-width: 900px) {
+
+    .main-content,
+    .main-content.map-right,
+    .main-content.map-hidden,
+    .main-content:not(.map-hidden) {
+        display: flex !important;
+        flex-direction: column !important;
+
+        grid-template-columns: unset !important;
+        grid-template-rows: unset !important;
+
+        gap: 0 !important;
+
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+
+        align-items: stretch !important;
+        align-content: initial !important;
+    }
+
+
+    /* -----------------------------------------------------
+       3) نقشه دوباره ارتفاع طبیعی داشبورد را می‌گیرد
+       نه ارتفاع کامل ستون Split Layout.
+    ----------------------------------------------------- */
+
+    .main-content > .map-section,
+    .main-content > #mapSection,
+    .main-content.map-right > .map-section,
+    .main-content.map-right > #mapSection {
+        order: 1 !important;
+
+        grid-column: auto !important;
+        grid-row: auto !important;
+
+        width: 100% !important;
+
+        height: 50vh !important;
+        min-height: 350px !important;
+        max-height: 90vh !important;
+
+        flex: 0 0 auto !important;
+
+        align-self: stretch !important;
+
+        border-bottom: 1px solid var(--border) !important;
+    }
+
+
+    /* اگر map-pinned در localStorage قدیمی باقی مانده باشد،
+       دیگر هیچ اثر بصری روی نقشه ندارد. */
+    .main-content > .map-section.pinned,
+    .main-content > #mapSection.pinned {
+        position: relative !important;
+
+        top: auto !important;
+
+        height: 50vh !important;
+        min-height: 350px !important;
+        max-height: 90vh !important;
+
+        z-index: 1 !important;
+    }
+
+
+    /* -----------------------------------------------------
+       4) پنل‌ها دقیقاً بعد از نقشه و در همان Scroll Container
+       قرار می‌گیرند؛ اسکرول مستقل پنل‌ها حذف می‌شود.
+    ----------------------------------------------------- */
+
+    .main-content > .panels-grid,
+    .main-content > #panelsGrid,
+    .main-content.map-right > .panels-grid,
+    .main-content.map-right > #panelsGrid {
+        order: 2 !important;
+
+        grid-column: auto !important;
+        grid-row: auto !important;
+
+        width: 100% !important;
+
+        min-height: 0 !important;
+
+        flex: 0 0 auto !important;
+
+        overflow-y: visible !important;
+        overflow-x: hidden !important;
+
+        position: relative !important;
+
+        z-index: 2 !important;
+    }
+
+
+    /* -----------------------------------------------------
+       5) اجزای مخصوص Split Layout حذف می‌شوند
+    ----------------------------------------------------- */
+
+    .map-width-resize-handle,
+    #mapWidthResizeHandle,
+    .map-side-btn,
+    #mapSideBtn {
+        display: none !important;
+    }
+}
+
+
+/* ---------------------------------------------------------
+   6) پنل‌ها هیچ‌وقت برای عبور "زیر نقشه" لایه‌بندی نمی‌شوند
+--------------------------------------------------------- */
+
+#panelsGrid,
+.panels-grid {
+    position: relative !important;
+    z-index: 2 !important;
+}
+
+
+/* ---------------------------------------------------------
+   7) فوتر بعد از پنل‌ها باقی می‌ماند
+--------------------------------------------------------- */
+
+.site-footer {
+    position: relative !important;
+    z-index: 3 !important;
+}

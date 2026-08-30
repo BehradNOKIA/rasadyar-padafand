@@ -10,6 +10,7 @@ import { SITE_VARIANT } from '@/config';
 import { t, getCurrentLanguage, getCurrentLanguageTag } from '@/services/i18n';
 import { track } from '@/services/analytics';
 import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
+import { openAnalysisWithSourceObservation } from '@/features/analysis/sourceIntake';
 import {
   renderCorroboratingSourceRisk,
   renderCredibilityBadge,
@@ -520,6 +521,225 @@ export class NewsPanel extends Panel {
     }
   }
 
+  private canAddNewsToAnalysis(): boolean {
+    try {
+      const currentUser = JSON.parse(
+        localStorage.getItem('rasadyar_user') || 'null'
+      );
+
+      return (
+        currentUser?.role === 'superadmin' ||
+        currentUser?.role === 'analyst'
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private cleanAnalysisText(value: unknown): string {
+    const raw = String(value ?? '');
+
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.innerHTML = raw;
+
+      return (textarea.value || textarea.textContent || raw)
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\u00a0/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    } catch {
+      return raw
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+  }
+
+  private renderAnalysisButton(link: string): string {
+    if (!this.canAddNewsToAnalysis()) {
+      return '';
+    }
+
+    return `
+      <button
+        type="button"
+        class="item-analysis-btn"
+        data-news-link="${escapeHtml(link)}"
+        title="افزودن این خبر به مرکز تحلیل"
+        aria-label="افزودن این خبر به مرکز تحلیل"
+        style="
+          margin-inline-start:6px;
+          padding:4px 8px;
+          border:1px solid #22c55e;
+          border-radius:5px;
+          background:#14532d;
+          color:#fff;
+          cursor:pointer;
+          font-size:11px;
+          font-family:inherit;
+          white-space:nowrap;
+        "
+      >
+        افزودن به تحلیل
+      </button>
+    `;
+  }
+
+  private addNewsToAnalysis(link: string): void {
+    const flatItem =
+      this.lastRawItems?.find(
+        (item) => item.link === link
+      );
+
+    if (flatItem) {
+      openAnalysisWithSourceObservation({
+        kind: 'news',
+
+        title:
+          this.cleanAnalysisText(
+            flatItem.title
+          ),
+
+        provider:
+          this.cleanAnalysisText(
+            flatItem.source
+          ) || 'News',
+
+        source:
+          this.cleanAnalysisText(
+            flatItem.source
+          ),
+
+        url:
+          flatItem.link,
+
+        observedAt:
+          flatItem.pubDate.toISOString(),
+
+        summary:
+          this.cleanAnalysisText(
+            flatItem.snippet ||
+            `خبر منتشرشده توسط ${flatItem.source}`
+          ),
+
+        observationType:
+          'news-item',
+
+        tags: [
+          'news',
+          flatItem.isAlert
+            ? 'alert'
+            : 'standard',
+        ],
+
+        metadata: {
+          panelId:
+            this.panelId,
+
+          importanceScore:
+            flatItem.importanceScore ?? null,
+
+          language:
+            flatItem.lang ?? null,
+
+          storyPhase:
+            flatItem.storyMeta?.phase ?? null,
+        },
+      });
+
+      return;
+    }
+
+    const cluster =
+      this.lastRawClusters?.find(
+        (item) =>
+          item.primaryLink === link ||
+          item.allItems.some(
+            (newsItem) =>
+              newsItem.link === link
+          )
+      );
+
+    if (!cluster) {
+      console.warn(
+        '[NewsPanel] News item not found for analysis:',
+        link
+      );
+
+      return;
+    }
+
+    const primaryItem =
+      cluster.allItems.find(
+        (item) =>
+          item.link ===
+          cluster.primaryLink
+      ) ||
+      cluster.allItems[0];
+
+    openAnalysisWithSourceObservation({
+      kind: 'news',
+
+      title:
+        this.cleanAnalysisText(
+          cluster.primaryTitle
+        ),
+
+      provider:
+        this.cleanAnalysisText(
+          cluster.primarySource
+        ) || 'News',
+
+      source:
+        this.cleanAnalysisText(
+          cluster.primarySource
+        ),
+
+      url:
+        cluster.primaryLink,
+
+      observedAt:
+        cluster.lastUpdated.toISOString(),
+
+      summary:
+        this.cleanAnalysisText(
+          primaryItem?.snippet ||
+          `خبر خوشه‌بندی‌شده از ${cluster.primarySource}`
+        ),
+
+      observationType:
+        'news-cluster',
+
+      tags: [
+        'news',
+        'cluster',
+      ],
+
+      metadata: {
+        panelId:
+          this.panelId,
+
+        clusterId:
+          cluster.id,
+
+        articleCount:
+          cluster.sourceCount,
+
+        uniquePublisherCount:
+          cluster.uniquePublisherCount ?? null,
+
+        threatLevel:
+          cluster.threat?.level ?? null,
+
+        threatCategory:
+          cluster.threat?.category ?? null,
+      },
+    });
+  }
+
   private renderFlat(items: NewsItem[]): void {
     this.lastRawItems = items;
 
@@ -549,7 +769,7 @@ export class NewsPanel extends Panel {
 
     const html = sorted
       .map(
-        (item) => `
+  (item) => `
       <div class="item ${item.isAlert ? 'alert' : ''}" ${item.monitorColor ? `style="border-inline-start-color: ${escapeHtml(item.monitorColor)}"` : ''}>
         <div class="item-source">
           ${escapeHtml(item.source)}
@@ -563,9 +783,17 @@ export class NewsPanel extends Panel {
         <a class="item-title" href="${sanitizeUrl(item.link)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>
         ${item.snippet ? `<div class="item-snippet">${escapeHtml(item.snippet.length > 200 ? item.snippet.slice(0, 200).replace(/\s+\S*$/, '') + '…' : item.snippet)}</div>` : ''}
         <div class="item-time">
-          ${formatTime(item.pubDate)}
-          ${getCurrentLanguage() !== 'en' ? `<button class="item-translate-btn" title="ترجمه" data-text="${escapeHtml(item.title)}">文</button>` : ''}
-        </div>
+
+  ${formatTime(item.pubDate)}
+
+  ${getCurrentLanguage() !== 'en'
+    ? `<button class="item-translate-btn" title="ترجمه" data-text="${escapeHtml(item.title)}">文</button>`
+    : ''
+  }
+
+  ${this.renderAnalysisButton(item.link)}
+
+</div>
       </div>
     `
       )
@@ -823,6 +1051,7 @@ export class NewsPanel extends Panel {
           <span class="top-sources">${topSourcesHtml}</span>
           <span class="item-time">${formatTime(cluster.lastUpdated)}</span>
           ${getCurrentLanguage() !== 'en' ? `<button class="item-translate-btn" title="ترجمه" data-text="${escapeHtml(cluster.primaryTitle)}">文</button>` : ''}
+          ${this.renderAnalysisButton(cluster.primaryLink)}
         </div>
         ${relatedAssetsHtml}
       </div>
@@ -832,6 +1061,25 @@ export class NewsPanel extends Panel {
   private setupContentDelegation(): void {
     this.content.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
+
+      const newsAnalysisBtn =
+        target.closest<HTMLElement>('.item-analysis-btn');
+
+      if (newsAnalysisBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const link =
+          newsAnalysisBtn.dataset.newsLink;
+
+        if (link) {
+          this.addNewsToAnalysis(
+            link
+          );
+        }
+
+        return;
+      }
 
       const assetBtn = target.closest<HTMLElement>('.related-asset');
       if (assetBtn) {

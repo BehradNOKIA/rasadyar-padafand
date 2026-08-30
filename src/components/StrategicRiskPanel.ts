@@ -21,6 +21,11 @@ import type { CountryScore } from '@/services/country-instability';
 import { fetchCachedRiskScores, isElevatedCiiScore, toCountryScore, type CachedRiskScores } from '@/services/cached-risk-scores';
 import { getCachedPosture } from '@/services/cached-theater-posture';
 import { trustedHtml } from '@/utils/dom-utils';
+import { openAnalysisWithEvidence } from '@/features/analysis/analysisBridge';
+import { openAnalysisWithSourceObservation } from '@/features/analysis/sourceIntake';
+import { can } from '@/auth/accessControl';
+import { getCurrentUser } from '@/auth/userStore';
+import { syncCanonicalAlerts } from '@/core/rasadyar-data';
 
 type StrategicRiskDisplayLevel = 'critical' | 'high' | 'elevated' | 'normal' | 'low';
 type StrategicRiskDisplayBand = {
@@ -154,6 +159,60 @@ export class StrategicRiskPanel extends Panel {
     );
     this.overview = localOverview;
     this.alerts = getRecentAlerts(24);
+
+    /*
+     * P2-Step5:
+     * mirror current Strategic Alerts into rasadyar_data_v1.alerts.
+     * The panel remains fully operational even if canonical sync fails.
+     */
+    const canonicalAlertResult =
+      syncCanonicalAlerts(
+        this.alerts.map(
+          (alert) => ({
+            id:
+              alert.id,
+
+            title:
+              alert.title,
+
+            summary:
+              alert.summary,
+
+            alertType:
+              alert.type,
+
+            priority:
+              alert.priority,
+
+            timestamp:
+              alert.timestamp,
+
+            countries:
+              alert.countries || [],
+
+            lat:
+              alert.location?.lat,
+
+            lon:
+              alert.location?.lon,
+
+            source:
+              "سامانه هشدارهای راهبردی رصدیار پدافند",
+
+            evidenceId:
+              `alert-evidence-${alert.id}`,
+          })
+        )
+      );
+
+    if (
+      !canonicalAlertResult.ok
+    ) {
+      console.warn(
+        "[StrategicRiskPanel] Canonical Alert mirror failed.",
+        canonicalAlertResult.error
+      );
+    }
 
     this.applyCachedRiskOverview(cachedRiskScores, localOverview);
     console.log('[StrategicRiskPanel] Using cached scores from backend');
@@ -426,6 +485,660 @@ export class StrategicRiskPanel extends Panel {
     `;
   }
 
+  private canAddAlertToAnalysis(): boolean {
+    return can(
+      getCurrentUser(),
+      "analysis.create"
+    );
+  }
+
+  private getAlertPriorityLabel(
+    priority: AlertPriority
+  ): string {
+    switch (priority) {
+      case "critical":
+        return "بحرانی";
+
+      case "high":
+        return "بالا";
+
+      case "medium":
+        return "متوسط";
+
+      case "low":
+        return "پایین";
+
+      default:
+        return priority;
+    }
+  }
+
+  private getAlertTypeLabel(
+    type: UnifiedAlert["type"]
+  ): string {
+    switch (type) {
+      case "convergence":
+        return "همگرایی رخدادها";
+
+      case "cii_spike":
+        return "جهش شاخص بی‌ثباتی";
+
+      case "cascade":
+        return "اثر آبشاری زیرساخت";
+
+      case "sanctions":
+        return "تحریم";
+
+      case "radiation":
+        return "پرتویی";
+
+      case "composite":
+        return "ترکیبی";
+
+      default:
+        return type;
+    }
+  }
+
+  private buildAlertArchiveCard(
+    alert: UnifiedAlert,
+    archivedAt: string
+  ): string {
+    const title =
+      escapeHtml(
+        alert.title
+      );
+
+    const type =
+      escapeHtml(
+        this.getAlertTypeLabel(
+          alert.type
+        )
+      );
+
+    const priority =
+      escapeHtml(
+        this.getAlertPriorityLabel(
+          alert.priority
+        )
+      );
+
+    const countries =
+      escapeHtml(
+        alert.countries?.length
+          ? alert.countries.join("، ")
+          : "نامشخص"
+      );
+
+    const time =
+      escapeHtml(
+        alert.timestamp.toLocaleString(
+          "fa-IR"
+        )
+      );
+
+    const svg = `
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="960"
+        height="540"
+        viewBox="0 0 960 540"
+      >
+        <rect
+          width="960"
+          height="540"
+          fill="#07110c"
+        />
+
+        <rect
+          x="34"
+          y="34"
+          width="892"
+          height="472"
+          rx="20"
+          fill="#0a1b12"
+          stroke="#1b5e3b"
+          stroke-width="2"
+        />
+
+        <text
+          x="880"
+          y="88"
+          direction="rtl"
+          text-anchor="end"
+          fill="#78e0ad"
+          font-size="24"
+          font-family="Tahoma, Arial, sans-serif"
+        >
+          آرشیو هشدار رصدیار پدافند
+        </text>
+
+        <text
+          x="880"
+          y="148"
+          direction="rtl"
+          text-anchor="end"
+          fill="#ffffff"
+          font-size="30"
+          font-weight="700"
+          font-family="Tahoma, Arial, sans-serif"
+        >
+          ${title}
+        </text>
+
+        <line
+          x1="80"
+          y1="184"
+          x2="880"
+          y2="184"
+          stroke="#193d2b"
+          stroke-width="2"
+        />
+
+        <text
+          x="880"
+          y="232"
+          direction="rtl"
+          text-anchor="end"
+          fill="#b8c8bf"
+          font-size="20"
+          font-family="Tahoma, Arial, sans-serif"
+        >
+          نوع هشدار: ${type}
+        </text>
+
+        <text
+          x="880"
+          y="278"
+          direction="rtl"
+          text-anchor="end"
+          fill="#b8c8bf"
+          font-size="20"
+          font-family="Tahoma, Arial, sans-serif"
+        >
+          سطح شدت: ${priority}
+        </text>
+
+        <text
+          x="880"
+          y="324"
+          direction="rtl"
+          text-anchor="end"
+          fill="#b8c8bf"
+          font-size="20"
+          font-family="Tahoma, Arial, sans-serif"
+        >
+          کشور / منطقه: ${countries}
+        </text>
+
+        <text
+          x="880"
+          y="370"
+          direction="rtl"
+          text-anchor="end"
+          fill="#b8c8bf"
+          font-size="20"
+          font-family="Tahoma, Arial, sans-serif"
+        >
+          زمان هشدار: ${time}
+        </text>
+
+        <text
+          x="880"
+          y="438"
+          direction="rtl"
+          text-anchor="end"
+          fill="#688679"
+          font-size="16"
+          font-family="Tahoma, Arial, sans-serif"
+        >
+          زمان آرشیو: ${escapeHtml(
+            new Date(
+              archivedAt
+            ).toLocaleString(
+              "fa-IR"
+            )
+          )}
+        </text>
+      </svg>
+    `;
+
+    return (
+      "data:image/svg+xml;charset=utf-8," +
+      encodeURIComponent(svg)
+    );
+  }
+
+  private addRadiationAlertToAnalysis(
+    alert: UnifiedAlert
+  ): void {
+    if (
+      !this.canAddAlertToAnalysis()
+    ) {
+      return;
+    }
+
+    const archivedAt =
+      new Date().toISOString();
+
+    const priorityLabel =
+      this.getAlertPriorityLabel(
+        alert.priority
+      );
+
+    const countries =
+      alert.countries?.length
+        ? alert.countries.join("، ")
+        : "";
+
+    const summaryParts = [
+      `نوع رویداد: پرتویی`,
+      `سطح هشدار: ${priorityLabel}`,
+      countries
+        ? `کشور / منطقه: ${countries}`
+        : "",
+      alert.summary,
+    ].filter(Boolean);
+
+    openAnalysisWithSourceObservation({
+      id:
+        `alert-evidence-${alert.id}`,
+
+      externalId:
+        alert.id,
+
+      kind:
+        "radiation",
+
+      title:
+        alert.title,
+
+      provider:
+        "سامانه هشدارهای راهبردی رصدیار پدافند",
+
+      source:
+        "سامانه هشدارهای راهبردی رصدیار پدافند",
+
+      sourceDomain:
+        "پرتویی",
+
+      observationType:
+        "strategic-risk-radiation-alert",
+
+      country:
+        alert.countries?.[0],
+
+      region:
+        countries || undefined,
+
+      lat:
+        alert.location?.lat,
+
+      lon:
+        alert.location?.lon,
+
+      observedAt:
+        alert.timestamp.toISOString(),
+
+      summary:
+        summaryParts.join("\n"),
+
+      severity:
+        alert.priority ===
+          "critical"
+          ? "critical"
+          : alert.priority ===
+              "high"
+            ? "high"
+            : alert.priority ===
+                "medium"
+              ? "medium"
+              : "low",
+
+      tags: [
+        "radiation",
+        "strategic-risk",
+        "alert",
+        alert.priority,
+      ],
+
+      metadata: {
+        alertId:
+          alert.id,
+
+        alertType:
+          alert.type,
+
+        alertPriority:
+          alert.priority,
+
+        countries:
+          alert.countries || [],
+
+        originalSummary:
+          alert.summary,
+
+        sourcePanel:
+          "strategic-risk",
+
+        locationLat:
+          alert.location?.lat ??
+          null,
+
+        locationLon:
+          alert.location?.lon ??
+          null,
+      },
+
+      archive: {
+        archiveId:
+          `radiation-${alert.id}-${Date.now()}`,
+
+        archivedAt,
+
+        archiveVersion:
+          1,
+
+        snapshotKind:
+          "metadata-card",
+
+        snapshotDataUrl:
+          this.buildAlertArchiveCard(
+            alert,
+            archivedAt
+          ),
+
+        mediaType:
+          "radiation",
+
+        channelName:
+          "هشدارهای راهبردی رصدیار",
+
+        playbackState:
+          `priority:${alert.priority}`,
+
+        note:
+          "این کارت آرشیوی در لحظه افزودن رویداد پرتویی به پرونده تحلیل ساخته شده و عنوان، شدت، منطقه و زمان هشدار را مستقل از داده زنده پنل حفظ می‌کند.",
+      },
+    });
+  }
+
+  private addSanctionsAlertToAnalysis(
+    alert: UnifiedAlert
+  ): void {
+    if (
+      !this.canAddAlertToAnalysis()
+    ) {
+      return;
+    }
+
+    const archivedAt =
+      new Date().toISOString();
+
+    const priorityLabel =
+      this.getAlertPriorityLabel(
+        alert.priority
+      );
+
+    const countries =
+      alert.countries?.length
+        ? alert.countries.join("، ")
+        : "";
+
+    const summaryParts = [
+      `نوع رویداد: تحریم`,
+      `سطح هشدار: ${priorityLabel}`,
+      countries
+        ? `کشور / منطقه: ${countries}`
+        : "",
+      alert.summary,
+    ].filter(Boolean);
+
+    openAnalysisWithSourceObservation({
+      id:
+        `alert-evidence-${alert.id}`,
+
+      externalId:
+        alert.id,
+
+      kind:
+        "sanctions",
+
+      title:
+        alert.title,
+
+      provider:
+        "سامانه هشدارهای راهبردی رصدیار پدافند",
+
+      source:
+        "سامانه هشدارهای راهبردی رصدیار پدافند",
+
+      sourceDomain:
+        "اقتصادی",
+
+      observationType:
+        "strategic-risk-sanctions-alert",
+
+      country:
+        alert.countries?.[0],
+
+      region:
+        countries || undefined,
+
+      lat:
+        alert.location?.lat,
+
+      lon:
+        alert.location?.lon,
+
+      observedAt:
+        alert.timestamp.toISOString(),
+
+      summary:
+        summaryParts.join("\n"),
+
+      severity:
+        alert.priority ===
+          "critical"
+          ? "critical"
+          : alert.priority ===
+              "high"
+            ? "high"
+            : alert.priority ===
+                "medium"
+              ? "medium"
+              : "low",
+
+      tags: [
+        "sanctions",
+        "strategic-risk",
+        "alert",
+        alert.priority,
+      ],
+
+      metadata: {
+        alertId:
+          alert.id,
+
+        alertType:
+          alert.type,
+
+        alertPriority:
+          alert.priority,
+
+        countries:
+          alert.countries || [],
+
+        originalSummary:
+          alert.summary,
+
+        sourcePanel:
+          "strategic-risk",
+
+        locationLat:
+          alert.location?.lat ??
+          null,
+
+        locationLon:
+          alert.location?.lon ??
+          null,
+      },
+
+      archive: {
+        archiveId:
+          `sanctions-${alert.id}-${Date.now()}`,
+
+        archivedAt,
+
+        archiveVersion:
+          1,
+
+        snapshotKind:
+          "metadata-card",
+
+        snapshotDataUrl:
+          this.buildAlertArchiveCard(
+            alert,
+            archivedAt
+          ),
+
+        mediaType:
+          "sanctions",
+
+        channelName:
+          "هشدارهای راهبردی رصدیار",
+
+        playbackState:
+          `priority:${alert.priority}`,
+
+        note:
+          "این کارت آرشیوی در لحظه افزودن رویداد تحریمی به پرونده تحلیل ساخته شده و عنوان، شدت، منطقه و زمان هشدار را مستقل از داده زنده پنل حفظ می‌کند.",
+      },
+    });
+  }
+
+  private addAlertToAnalysis(
+    alert: UnifiedAlert
+  ): void {
+    if (
+      !this.canAddAlertToAnalysis()
+    ) {
+      return;
+    }
+
+    if (
+      alert.type ===
+      "sanctions"
+    ) {
+      this.addSanctionsAlertToAnalysis(
+        alert
+      );
+
+      return;
+    }
+
+    if (
+      alert.type ===
+      "radiation"
+    ) {
+      this.addRadiationAlertToAnalysis(
+        alert
+      );
+
+      return;
+    }
+
+    const archivedAt =
+      new Date().toISOString();
+
+    const priorityLabel =
+      this.getAlertPriorityLabel(
+        alert.priority
+      );
+
+    const typeLabel =
+      this.getAlertTypeLabel(
+        alert.type
+      );
+
+    const countries =
+      alert.countries?.length
+        ? alert.countries.join("، ")
+        : "";
+
+    const summaryParts = [
+      `سطح هشدار: ${priorityLabel}`,
+      `نوع تهدید: ${typeLabel}`,
+      countries
+        ? `کشور / منطقه: ${countries}`
+        : "",
+      alert.summary,
+    ].filter(Boolean);
+
+    openAnalysisWithEvidence({
+      id:
+        `alert-evidence-${alert.id}`,
+
+      kind:
+        "alert",
+
+      title:
+        alert.title,
+
+      source:
+        "سامانه هشدارهای راهبردی رصدیار پدافند",
+
+      country:
+        alert.countries?.[0],
+
+      region:
+        countries || undefined,
+
+      lat:
+        alert.location?.lat,
+
+      lon:
+        alert.location?.lon,
+
+      timestamp:
+        alert.timestamp.toISOString(),
+
+      summary:
+        summaryParts.join("\n"),
+
+      archive: {
+        archiveId:
+          `alert-${alert.id}-${Date.now()}`,
+
+        archivedAt,
+
+        archiveVersion:
+          1,
+
+        snapshotKind:
+          "metadata-card",
+
+        snapshotDataUrl:
+          this.buildAlertArchiveCard(
+            alert,
+            archivedAt
+          ),
+
+        mediaType:
+          "alert",
+
+        channelName:
+          "هشدارهای راهبردی رصدیار",
+
+        playbackState:
+          `priority:${alert.priority}`,
+
+        note:
+          "این کارت آرشیوی در لحظه افزودن هشدار به پرونده تحلیل ساخته شده و عنوان، نوع، شدت، منطقه و زمان هشدار را به‌صورت مستقل حفظ می‌کند.",
+      },
+    });
+  }
+
   private renderRecentAlerts(): string {
     if (this.alerts.length === 0) {
       return '';
@@ -433,27 +1146,81 @@ export class StrategicRiskPanel extends Panel {
 
     const displayAlerts = this.alerts.slice(0, 5);
 
+    const canAddToAnalysis =
+      this.canAddAlertToAnalysis();
+
     return `
       <div class="risk-section">
         <div class="risk-section-title">${t('components.strategicRisk.recentAlerts', { count: String(this.alerts.length) })}</div>
         <div class="risk-alerts">
           ${displayAlerts.map(alert => {
-      const hasLocation = alert.location?.lat && alert.location.lon;
-      const clickableClass = hasLocation ? 'risk-alert-clickable' : '';
-      const locationAttrs = hasLocation
-        ? `data-lat="${alert.location!.lat}" data-lon="${alert.location!.lon}"`
-        : '';
+      const hasLocation =
+        typeof alert.location?.lat === "number" &&
+        typeof alert.location?.lon === "number";
+
+      const clickableClass =
+        hasLocation
+          ? 'risk-alert-clickable'
+          : '';
+
+      const locationAttrs =
+        hasLocation
+          ? `data-lat="${alert.location!.lat}" data-lon="${alert.location!.lon}"`
+          : '';
+
+      const alertId =
+        escapeHtml(
+          alert.id
+        );
+
+      const analysisButton =
+        canAddToAnalysis
+          ? `
+              <button
+                type="button"
+                class="risk-alert-analysis-btn"
+                data-alert-id="${alertId}"
+                title="افزودن این هشدار به پرونده تحلیل"
+                style="
+                  margin-top:5px;
+                  align-self:flex-start;
+                  padding:4px 8px;
+                  border:1px solid rgba(52,211,153,.28);
+                  border-radius:5px;
+                  background:rgba(20,83,45,.45);
+                  color:#d1fae5;
+                  font-family:inherit;
+                  font-size:9px;
+                  line-height:1.4;
+                  cursor:pointer;
+                "
+              >
+                افزودن به تحلیل
+              </button>
+            `
+          : '';
 
       return `
-              <div class="risk-alert ${clickableClass}" style="border-left: 3px solid ${this.getPriorityColor(alert.priority)}" ${locationAttrs}>
+              <div
+                class="risk-alert ${clickableClass}"
+                data-alert-card-id="${alertId}"
+                style="border-left: 3px solid ${this.getPriorityColor(alert.priority)}"
+                ${locationAttrs}
+              >
                 <div class="risk-alert-header">
                   <span class="risk-alert-type">${this.getTypeEmoji(alert.type)}</span>
                   <span class="risk-alert-priority">${this.getPriorityEmoji(alert.priority)}</span>
                   <span class="risk-alert-title">${escapeHtml(alert.title)}</span>
                   ${hasLocation ? '<span class="risk-location-icon">↗</span>' : ''}
                 </div>
+
                 <div class="risk-alert-summary">${escapeHtml(alert.summary)}</div>
-                <div class="risk-alert-time">${this.formatTime(alert.timestamp)}</div>
+
+                <div class="risk-alert-time">
+                  ${this.formatTime(alert.timestamp)}
+                </div>
+
+                ${analysisButton}
               </div>
             `;
     }).join('')}
@@ -537,6 +1304,55 @@ export class StrategicRiskPanel extends Panel {
         }
       });
     });
+
+    // Add strategic alerts to Analysis Center.
+    const analysisBtns =
+      this.content.querySelectorAll(
+        '.risk-alert-analysis-btn'
+      );
+
+    analysisBtns.forEach(
+      (button) => {
+        button.addEventListener(
+          'click',
+          (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            if (
+              !this.canAddAlertToAnalysis()
+            ) {
+              return;
+            }
+
+            const alertId =
+              (
+                button as
+                  HTMLElement
+              ).dataset.alertId;
+
+            if (!alertId) {
+              return;
+            }
+
+            const alert =
+              this.alerts.find(
+                (item) =>
+                  item.id ===
+                  alertId
+              );
+
+            if (!alert) {
+              return;
+            }
+
+            this.addAlertToAnalysis(
+              alert
+            );
+          }
+        );
+      }
+    );
 
     // Clickable alerts with location
     const clickableAlerts = this.content.querySelectorAll('.risk-alert-clickable');

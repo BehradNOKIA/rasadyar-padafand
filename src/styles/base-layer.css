@@ -10,3 +10,10 @@
 @import url('./country-deep-dive.css') layer(base);
 @import url('./map-context-menu.css') layer(base);
 @import url('./supply-chain-panel.css') layer(base);
+
+.auth-user-dropdown-wrapper{}
+.auth-user-dropdown-wrapper{}
+.auth-user-menu-wrapper{position:relative;display:inline-block}
+.auth-user-dropdown{position:absolute;top:35px;right:0;z-index:9999;background:#111;border:1px solid #444;padding:8px;min-width:180px;display:flex;flex-direction:column;gap:6px}
+.auth-user-dropdown.hidden{display:none}
+.auth-menu-item,.auth-user-dropdown-btn{cursor:pointer}

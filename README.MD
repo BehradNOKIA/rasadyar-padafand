@@ -1,233 +1,218 @@
-# 🛡️ رصدیار پدافند | Rasadyar Padafand | Schutzmonitor Zivile Verteidigung
+# World Monitor
+
+[简体中文](README.zh-CN.md) | [日本語](README.ja-JP.md)
+
+**Real-time global intelligence dashboard** — AI-powered news aggregation, geopolitical monitoring, and infrastructure tracking in a unified situational awareness interface.
+
+[![GitHub stars](https://img.shields.io/github/stars/koala73/worldmonitor?style=social)](https://github.com/koala73/worldmonitor/stargazers)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/re63kWKxaz)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Last commit](https://img.shields.io/github/last-commit/koala73/worldmonitor)](https://github.com/koala73/worldmonitor/commits/main)
+[![Latest release](https://img.shields.io/github/v/release/koala73/worldmonitor?style=flat)](https://github.com/koala73/worldmonitor/releases/latest)
+[![npm: worldmonitor](https://img.shields.io/npm/v/worldmonitor?logo=npm&label=npm)](https://www.npmjs.com/package/worldmonitor)
+[![smithery badge](https://smithery.ai/badge/worldmonitor/wm-mcp)](https://smithery.ai/servers/worldmonitor/wm-mcp)
+[![skills.sh](https://skills.sh/b/koala73/worldmonitor)](https://skills.sh/koala73/worldmonitor)
 
 <p align="center">
-  <b>سامانه هوشمند رصد و تحلیل وضعیت جهانی با تمرکز بر پدافند غیرعامل، تاب‌آوری زیرساخت‌ها و آگاهی موقعیتی</b>
+  <a href="https://www.worldmonitor.app"><img src="https://img.shields.io/badge/Web_App-worldmonitor.app-blue?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Web App"></a>&nbsp;
+  <a href="https://tech.worldmonitor.app"><img src="https://img.shields.io/badge/Tech_Variant-tech.worldmonitor.app-0891b2?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Tech Variant"></a>&nbsp;
+  <a href="https://finance.worldmonitor.app"><img src="https://img.shields.io/badge/Finance_Variant-finance.worldmonitor.app-059669?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Finance Variant"></a>&nbsp;
+  <a href="https://commodity.worldmonitor.app"><img src="https://img.shields.io/badge/Commodity_Variant-commodity.worldmonitor.app-b45309?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Commodity Variant"></a>&nbsp;
+  <a href="https://happy.worldmonitor.app"><img src="https://img.shields.io/badge/Happy_Variant-happy.worldmonitor.app-f59e0b?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Happy Variant"></a>&nbsp;
+  <a href="https://energy.worldmonitor.app"><img src="https://img.shields.io/badge/Energy_Variant-energy.worldmonitor.app-eab308?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Energy Variant"></a>
 </p>
 
 <p align="center">
-  <b>Intelligent Global Monitoring & Situational Awareness Platform for Passive Defense and Resilience</b>
+  <a href="https://www.npmjs.com/package/worldmonitor"><img src="https://img.shields.io/npm/v/worldmonitor?style=for-the-badge&logo=npm&logoColor=white&label=npm%20i%20worldmonitor&color=CB3837" alt="npm i worldmonitor"></a>&nbsp;
+  <a href="https://www.npmjs.com/package/worldmonitor"><img src="https://img.shields.io/badge/CLI-npx%20worldmonitor-CB3837?style=for-the-badge&logo=npm&logoColor=white" alt="npx worldmonitor"></a>&nbsp;
+  <a href="https://pypi.org/project/worldmonitor-sdk/"><img src="https://img.shields.io/pypi/v/worldmonitor-sdk?style=for-the-badge&logo=pypi&logoColor=white&label=pip%20install%20worldmonitor-sdk&color=3775A9" alt="pip install worldmonitor-sdk"></a>&nbsp;
+  <a href="https://rubygems.org/gems/worldmonitor"><img src="https://img.shields.io/gem/v/worldmonitor?style=for-the-badge&logo=rubygems&logoColor=white&label=gem%20install%20worldmonitor&color=E9573F" alt="gem install worldmonitor"></a>&nbsp;
+  <a href="https://pkg.go.dev/github.com/koala73/worldmonitor/sdk/go"><img src="https://img.shields.io/badge/go%20get-sdk%2Fgo-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="go get github.com/koala73/worldmonitor/sdk/go"></a>
 </p>
 
 <p align="center">
-  <b>Intelligente Plattform zur globalen Lageüberwachung für Zivilschutz und Resilienz</b>
+  <a href="https://www.worldmonitor.app/api/download?platform=windows-exe"><img src="https://img.shields.io/badge/Download-Windows_(.exe)-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows"></a>&nbsp;
+  <a href="https://www.worldmonitor.app/api/download?platform=macos-arm64"><img src="https://img.shields.io/badge/Download-macOS_Apple_Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS ARM"></a>&nbsp;
+  <a href="https://www.worldmonitor.app/api/download?platform=macos-x64"><img src="https://img.shields.io/badge/Download-macOS_Intel-555555?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Intel"></a>&nbsp;
+  <a href="https://www.worldmonitor.app/api/download?platform=linux-appimage"><img src="https://img.shields.io/badge/Download-Linux_(.AppImage)-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download Linux"></a>
 </p>
 
+<p align="center">
+  <a href="https://www.worldmonitor.app/docs/documentation"><strong>Documentation</strong></a> &nbsp;·&nbsp;
+  <a href="https://github.com/koala73/worldmonitor/releases/latest"><strong>Releases</strong></a> &nbsp;·&nbsp;
+  <a href="https://www.worldmonitor.app/docs/contributing"><strong>Contributing</strong></a>
+</p>
+
+![World Monitor Dashboard](docs/images/worldmonitor-7-mar-2026.jpg)
 
 ---
 
-# 🇮🇷 فارسی
+## What It Does
 
-## معرفی پروژه
+- **Curated news feeds** across global and regional categories, AI-synthesized into briefs
+- **Dual map engine** — 3D globe (globe.gl) and WebGL flat map (deck.gl) with a shared map-layer catalog
+- **Panel inventory** — concrete panel implementations across specialized variants
+- **Cross-stream correlation** — military, economic, disaster, and escalation signal convergence
+- **Country Instability Index (CII)** — server-authoritative CII v8 stress scoring for the Tier-1 registry
+- **Finance radar** — stock exchanges, commodities, crypto, and a market composite
+- **Local AI** — run everything with Ollama, no API keys required
+- **Site variants** from a single codebase (world, tech, finance, commodity, happy, energy)
+- **Native desktop app** (Tauri 2) for macOS, Windows, and Linux
+- **Multilingual UI** with native-language feeds and RTL support
 
-**رصدیار پدافند** یک داشبورد هوشمند رصد، تحلیل و نمایش داده‌های محیطی و ژئوپلیتیکی است که با هدف ایجاد یک بستر آگاهی موقعیتی برای حوزه **پدافند غیرعامل، مدیریت بحران، امنیت زیرساخت‌های حیاتی و تحلیل تهدیدات نوظهور** توسعه یافته است.
-
-این پروژه با ترکیب فناوری‌های نوین نمایش داده، نقشه‌های تعاملی، تحلیل اطلاعات و معماری ماژولار، امکان مشاهده و تحلیل سریع رویدادها، تهدیدات و تغییرات محیطی را فراهم می‌کند.
-
-
-## اهداف اصلی
-
-- ایجاد مرکز رصد هوشمند تهدیدات و بحران‌ها
-- افزایش آگاهی موقعیتی تصمیم‌گیرندگان
-- پشتیبانی از تحلیل‌های راهبردی پدافند غیرعامل
-- نمایش داده‌های پیچیده در قالب داشبورد تعاملی
-- کمک به شناسایی روندهای جهانی و منطقه‌ای
-
-
-## قابلیت‌ها
-
-### 🌍 نقشه هوشمند جهانی
-- نمایش تعاملی داده‌های جغرافیایی
-- لایه‌های اطلاعاتی مختلف
-- تحلیل موقعیت‌های بحرانی
-
-### 📊 داشبورد تحلیل وضعیت
-- نمایش شاخص‌های کلیدی
-- پنل‌های تحلیلی
-- مدیریت لایه‌های اطلاعاتی
-
-### ⚠️ پایش تهدیدات
-- رصد رخدادهای جهانی
-- تحلیل مناطق حساس
-- پشتیبانی از آگاهی موقعیتی
-
-### 🏢 کاربردهای پدافند غیرعامل
-
-- حفاظت زیرساخت‌های حیاتی
-- تحلیل آسیب‌پذیری
-- مدیریت بحران
-- تصمیم‌سازی راهبردی
-
+For the full feature list, architecture, data sources, and algorithms, see the **[documentation](https://www.worldmonitor.app/docs/documentation)**.
 
 ---
 
-## فناوری‌ها
+## Support Status
 
-این پروژه بر پایه فناوری‌های مدرن وب توسعه یافته است:
+All site variants and desktop binaries are built from a single codebase and ship from the same release process. The table below clarifies maintenance status so you know which surfaces are safe to depend on.
 
-- TypeScript
-- React
-- Vite
-- Interactive Mapping
-- Modern Web Architecture
-- Data Visualization
+| Surface | Status | Notes |
+|---------|--------|-------|
+| `worldmonitor.app`, `tech.`, `finance.`, `commodity.`, `happy.`, `energy.` | Stable | Public deployments built from this repo, actively maintained |
+| Desktop binaries (Windows / macOS Apple Silicon / macOS Intel / Linux AppImage) | Stable | One Tauri binary for every variant — install World Monitor and switch to tech, finance, commodity, energy, or happy in-app. There is deliberately no per-variant download |
 
+Issues filed against any of the above are triaged from the same backlog — see the [issues board](https://github.com/koala73/worldmonitor/issues) for currently-open work.
 
 ---
 
-## راه‌اندازی پروژه
-
-### پیش‌نیازها
-
-- Node.js
-- npm
-- Git
-
-
-### نصب وابستگی‌ها
+## Quick Start
 
 ```bash
+git clone https://github.com/koala73/worldmonitor.git
+cd worldmonitor
 npm install
-
----------------------------------------------
-🇬🇧 English
-Project Overview
-
-Rasadyar Padafand is an intelligent monitoring and situational awareness platform designed for global observation, strategic analysis, passive defense, critical infrastructure resilience, and emerging threat assessment.
-
-The platform combines interactive visualization, geographic intelligence, and modern web technologies to provide a comprehensive operational picture for analysts and decision-makers.
-
-Main Objectives
-Build an intelligent global monitoring environment
-Improve strategic situational awareness
-Support passive defense planning
-Visualize complex information efficiently
-Analyze emerging risks and trends
-Key Features
-🌍 Interactive Global Map
-Dynamic geographic visualization
-Multiple information layers
-Crisis and risk observation
-📊 Analytical Dashboard
-Real-time information panels
-Data visualization
-Modular monitoring components
-⚠️ Threat Awareness
-Global event monitoring
-Risk analysis
-Strategic observation
-🏢 Passive Defense Applications
-Critical infrastructure protection
-Resilience assessment
-Crisis management support
-Strategic decision support
-Technology Stack
-
-Built with modern web technologies:
-
-TypeScript
-React
-Vite
-Interactive Maps
-Data Visualization
-Modular Web Architecture
-Installation
-
-Requirements:
-
-Node.js
-npm
-Git
-
-Install dependencies:
-npm install
-Run development server:
 npm run dev
-Build production version:
-npm run build
-Contribution
+```
 
-Contributions are welcome from experts in:
+Open [localhost:3000](http://localhost:3000) (override the port with `DEV_PORT` in `.env.local`). The app runs with no environment variables.
 
-Passive Defense
-Cyber Security
-Artificial Intelligence
-Data Science
-GIS
-Crisis Management
-------------------------------------------------------
-🇩🇪 Deutsch
-Projektübersicht
+Feature-specific data sources may require credentials. See `.env.example` for the full list.
 
-Rasadyar Padafand ist eine intelligente Plattform zur globalen Beobachtung, Analyse und Darstellung von Informationen mit Schwerpunkt auf Zivilschutz, Resilienz kritischer Infrastrukturen und strategischer Lageerfassung.
+For variant-specific development:
 
-Das System kombiniert moderne Webtechnologien, interaktive Karten und Datenanalyse, um Entscheidungsträgern eine umfassende Lageübersicht bereitzustellen.
+```bash
+npm run dev:tech       # tech.worldmonitor.app
+npm run dev:finance    # finance.worldmonitor.app
+npm run dev:commodity  # commodity.worldmonitor.app
+npm run dev:happy      # happy.worldmonitor.app
+npm run dev:energy     # energy.worldmonitor.app
+```
 
-Hauptziele
-Aufbau einer intelligenten Überwachungsplattform
-Verbesserung der strategischen Lagebewertung
-Unterstützung des Zivilschutzes
-Visualisierung komplexer Daten
-Analyse neuer Risiken und Bedrohungen
-Hauptfunktionen
-🌍 Interaktive Weltkarte
-Geografische Datenvisualisierung
-Mehrere Informationsschichten
-Globale Lagebeobachtung
-📊 Analyse-Dashboard
-Dynamische Informationspanels
-Datenvisualisierung
-Modulare Komponenten
-⚠️ Bedrohungsanalyse
-Globale Ereignisüberwachung
-Risikoanalyse
-Strategische Beobachtung
-🏢 Anwendungen im Zivilschutz
-Schutz kritischer Infrastruktur
-Resilienzbewertung
-Krisenmanagement
-Strategische Entscheidungsunterstützung
-Technologie
+See the **[self-hosting guide](https://www.worldmonitor.app/docs/getting-started)** for deployment options (Vercel, Docker, static).
 
-Verwendete Technologien:
+---
 
-TypeScript
-React
-Vite
-Interaktive Karten
-Datenvisualisierung
-Moderne Webarchitektur
-Installation
+## Tech Stack
 
-Voraussetzungen:
+| Category | Technologies |
+|----------|-------------|
+| **Frontend** | Vanilla TypeScript, Vite, globe.gl + Three.js, deck.gl + MapLibre GL |
+| **Desktop** | Tauri 2 (Rust) with Node.js sidecar |
+| **AI/ML** | Ollama / Groq / OpenRouter, Transformers.js (browser-side) |
+| **API Contracts** | Protocol Buffers and sebuf HTTP annotations |
+| **Deployment** | Vercel Edge Functions, Railway relay, Tauri, PWA |
+| **Caching** | Redis (Upstash), 3-tier cache, CDN, service worker |
 
-Node.js
-npm
-Git
+Full stack details in the **[architecture docs](https://www.worldmonitor.app/docs/architecture)**.
 
-Installation:
-npm install
-Entwicklung starten:
-npm run dev
-Produktionsversion erstellen:
-npm run build
-Mitarbeit
+---
 
-Beiträge von Experten aus folgenden Bereichen sind willkommen:
+## Programmatic Access
 
-Zivilschutz
-Cybersicherheit
-Künstliche Intelligenz
-Datenanalyse
-Geoinformationssysteme
-Krisenmanagement
-License
+World Monitor is built for agents and scripts as well as browsers:
 
-This project is released under the terms of its applicable open-source license.
+- **MCP server** — `https://worldmonitor.app/mcp` (Streamable HTTP). Public `tools/list`; `tools/call` authenticates with a `X-WorldMonitor-Key` header or OAuth.
+- **REST API** — base `https://api.worldmonitor.app`, described by the [OpenAPI spec](https://worldmonitor.app/openapi.yaml).
+- **CLI** — the official [`worldmonitor`](https://www.npmjs.com/package/worldmonitor) npm package (source in [`cli/`](cli/)):
 
-⭐ Rasadyar Padafand
+  ```sh
+  npx worldmonitor tools          # run ad-hoc — list every MCP tool (no key needed)
+  npm install -g worldmonitor     # or install the `worldmonitor` (alias `wm`) command
+  worldmonitor risk IR --api-key wm_xxx
+  ```
 
-Observe. Analyze. Protect.
+- **SDKs** — official zero-dependency client libraries mirroring the CLI: Python [`worldmonitor-sdk`](https://pypi.org/project/worldmonitor-sdk/) (source in [`sdk/python/`](sdk/python/)), Ruby [`worldmonitor`](https://rubygems.org/gems/worldmonitor) ([`sdk/ruby/`](sdk/ruby/)), Go [`github.com/koala73/worldmonitor/sdk/go`](https://pkg.go.dev/github.com/koala73/worldmonitor/sdk/go) ([`sdk/go/`](sdk/go/)). Guide: [worldmonitor.app/docs/sdks](https://www.worldmonitor.app/docs/sdks).
 
-رصد کن. تحلیل کن. محافظت کن.
+Agent discovery files: [`llms.txt`](https://worldmonitor.app/llms.txt) · [agent-skills manifest](https://worldmonitor.app/.well-known/agent-skills/index.json) · [api-catalog](https://worldmonitor.app/.well-known/api-catalog). Get an API key at [worldmonitor.app/pro](https://www.worldmonitor.app/pro).
 
-Beobachten. Analysieren. Schützen.
+---
+
+## Flight Data
+
+Flight data provided graciously by [Wingbits](https://wingbits.com?utm_source=worldmonitor&utm_medium=referral&utm_campaign=worldmonitor), the most advanced ADS-B flight data solution.
+
+---
+
+## Data Sources
+
+WorldMonitor aggregates attributed upstream sources across geopolitics, finance, energy, climate, aviation, cyber, military, infrastructure, and news intelligence. Curated feeds and freshness-tracked source groups are published in the full [data sources catalog](https://www.worldmonitor.app/docs/data-sources), with provider, feed-tier, license-posture, and collection-method details.
+
+---
+
+## Contributing
+
+Contributions welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
+```bash
+npm run typecheck        # Type checking
+npm run build:full       # Production build
+```
+
+---
+
+## License
+
+**AGPL-3.0-only** for the source code. Commercial use is permitted under the AGPL when you comply with its copyleft and source-availability terms.
+
+| Use Case | Allowed? |
+|----------|----------|
+| Personal / research / educational | Yes, under AGPL-3.0-only |
+| Self-hosted instance | Yes, under AGPL-3.0-only |
+| Fork and modify | Yes, share source under AGPL-3.0-only when required |
+| Commercial use / SaaS | Yes, under AGPL-3.0-only when you comply with AGPL obligations |
+| Private-source proprietary use or official branding rights | Separate commercial or trademark permission needed |
+
+See [LICENSE](LICENSE) for the full code license and [docs/license.mdx](docs/license.mdx) for a plain-language summary. Commercial licensing is available as an alternative option for teams that need non-AGPL terms.
+
+Copyright (C) 2024-2026 Elie Habib. All rights reserved.
+
+---
+
+## Author
+
+**Elie Habib** — [GitHub](https://github.com/koala73)
+
+## Contributors
+
+<a href="https://github.com/koala73/worldmonitor/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=koala73/worldmonitor" />
+</a>
+
+## Security Acknowledgments
+
+We thank the following researchers for responsibly disclosing security issues:
+
+- **Cody Richard** — Disclosed three security findings covering IPC command exposure, renderer-to-sidecar trust boundary analysis, and fetch patch credential injection architecture (2026)
+
+See our [Security Policy](./SECURITY.md) for responsible disclosure guidelines.
+
+---
+
+<p align="center">
+  <a href="https://www.worldmonitor.app">worldmonitor.app</a> &nbsp;·&nbsp;
+  <a href="https://www.worldmonitor.app/docs/documentation">docs.worldmonitor.app</a> &nbsp;·&nbsp;
+  <a href="https://finance.worldmonitor.app">finance.worldmonitor.app</a> &nbsp;·&nbsp;
+  <a href="https://commodity.worldmonitor.app">commodity.worldmonitor.app</a>
+</p>
+
+## Star History
+
+<a href="https://star-history.dera.page/#koala73/worldmonitor&type=Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=koala73/worldmonitor&type=Date&theme=dark" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=koala73/worldmonitor&type=Date" />
+ </picture>
+</a>
