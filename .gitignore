@@ -142,3 +142,12 @@ playground-pricing.html
 # compile time — `cargo test` fails on a resource path that does not exist.
 src-tauri/notices/*
 !src-tauri/notices/.gitkeep
+# Local debug/build logs
+*-error.txt
+*.log
+
+# Local generated archives
+*.zip
+
+# Local audit exports
+git-files.txt
