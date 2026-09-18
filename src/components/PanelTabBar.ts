@@ -430,7 +430,7 @@ export class PanelTabBar {
       this.updateRasadyarNavState();
 
       const directEventBySection: Partial<Record<RasadyarNavKey, string>> = {
-        smart-analysis: 'rasadyar:open-analysis-center',
+        'smart-analysis': 'rasadyar:open-analysis-center',
         reports: 'rasadyar:open-report-center',
         settings: 'rasadyar:open-system-settings',
       };
