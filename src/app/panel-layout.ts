@@ -1096,6 +1096,17 @@ export class PanelLayoutManager implements AppModule {
             </div>
             <span class="header-clock" id="headerClock" translate="no"></span>
             <div class="map-header-actions">
+              <div class="rasadyar-map-time-control" id="rasadyarMapTimeControl" title="Map time range">
+                <span class="rasadyar-map-time-label">&#1576;&#1575;&#1586;&#1607; &#1586;&#1605;&#1575;&#1606;&#1740;</span>
+                <select class="rasadyar-map-time-select" id="rasadyarMapTimeSelect" aria-label="Map time range">
+                  <option value="1h">&#1777; &#1587;&#1575;&#1593;&#1578;</option>
+                  <option value="6h">&#1782; &#1587;&#1575;&#1593;&#1578;</option>
+                  <option value="24h">&#1778;&#1780; &#1587;&#1575;&#1593;&#1578;</option>
+                  <option value="48h">&#1780;&#1784; &#1587;&#1575;&#1593;&#1578;</option>
+                  <option value="7d">&#1783; &#1585;&#1608;&#1586;</option>
+                  <option value="all">&#1607;&#1605;&#1607; &#1583;&#1575;&#1583;&#1607;&#8204;&#1607;&#1575;</option>
+                </select>
+              </div>
               <div class="map-dimension-toggle" id="mapDimensionToggle">
                 <button class="map-dim-btn${isGlobeMode ? '' : ' active'}" data-mode="flat" title="2D Map">2D</button>
                 <button class="map-dim-btn${isGlobeMode ? ' active' : ''}" data-mode="globe" title="3D Globe">3D</button>
@@ -2826,15 +2837,33 @@ export class PanelLayoutManager implements AppModule {
 
     this.ctx.map.initEscalationGetters();
     this.ctx.currentTimeRange = this.ctx.map.getTimeRange();
+
+    const mapTimeSelect = document.getElementById('rasadyarMapTimeSelect') as HTMLSelectElement | null;
+    if (mapTimeSelect) {
+      mapTimeSelect.value = this.ctx.currentTimeRange;
+      mapTimeSelect.addEventListener('change', () => {
+        const range = mapTimeSelect.value as typeof this.ctx.currentTimeRange;
+        this.ctx.currentTimeRange = range;
+        this.ctx.map?.setTimeRange(range);
+        this.applyTimeRangeFilterDebounced();
+      });
+    }
+
     markLcpDebug('wm:map:container-ready');
 
     this.ctx.map.onTimeRangeChanged((range) => {
       this.ctx.currentTimeRange = range;
+      if (mapTimeSelect) mapTimeSelect.value = range;
       this.applyTimeRangeFilterDebounced();
     });
 
     this.applyPanelSettings();
     this.applyInitialUrlState();
+
+    if (mapTimeSelect && this.ctx.map) {
+      this.ctx.currentTimeRange = this.ctx.map.getTimeRange();
+      mapTimeSelect.value = this.ctx.currentTimeRange;
+    }
 
     // Observe each panel for viewport entry. As soon as a panel scrolls
     // within ~200px of the viewport it fires loadAllData() once

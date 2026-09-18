@@ -3485,9 +3485,6 @@
       "status": "excluded",
       "references": [
         {
-          "path": "src/app/panel-layout.ts"
-        },
-        {
           "path": "src/config/variant-meta.ts"
         }
       ]
@@ -4417,6 +4414,20 @@
       ]
     },
     {
+      "host": "geocoding-api.open-meteo.com",
+      "provider": "geocoding-api.open-meteo.com",
+      "kind": "structured",
+      "observed": true,
+      "license": "Provider terms for this upstream API/dataset; verify before redistribution",
+      "attribution": "Credit geocoding-api.open-meteo.com and link to the original upstream API/dataset.",
+      "status": "terms-review",
+      "references": [
+        {
+          "path": "src/components/LiveWebcamsPanel.ts"
+        }
+      ]
+    },
+    {
       "host": "geoserver.cwfif.nrcan.gc.ca",
       "provider": "CWFIS / CWFIF (NRCan)",
       "kind": "structured",
@@ -4495,6 +4506,12 @@
         },
         {
           "path": "src/app/desktop-updater.ts"
+        },
+        {
+          "path": "src/auth/SystemSettings.tsx"
+        },
+        {
+          "path": "src/components/PanelTabBar.ts"
         },
         {
           "path": "src/services/analytics.ts"
@@ -9841,6 +9858,9 @@
       "status": "excluded",
       "references": [
         {
+          "path": "src/components/LiveWebcamsPanel.ts"
+        },
+        {
           "path": "src/components/PinnedWebcamsPanel.ts"
         }
       ]
@@ -14044,6 +14064,9 @@
       "references": [
         {
           "path": "server/worldmonitor/webcam/v1/get-webcam-image.ts"
+        },
+        {
+          "path": "src/components/LiveWebcamsPanel.ts"
         },
         {
           "path": "src/services/webcams/index.ts"

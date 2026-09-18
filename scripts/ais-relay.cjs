@@ -8085,12 +8085,16 @@ function processRawUpstreamMessage(raw) {
     const parsed = JSON.parse(raw);
     if (parsed?.MessageType === 'PositionReport') {
       if (processPositionReportForSnapshot(parsed)) acceptedType = 'position';
+    } else if (parsed?.MessageType === 'StandardClassBPositionReport') {
+      if (processStandardClassBPositionReportForSnapshot(parsed)) acceptedType = 'position';
+    } else if (parsed?.MessageType === 'ExtendedClassBPositionReport') {
+      if (processExtendedClassBPositionReportForSnapshot(parsed)) acceptedType = 'position';
     } else if (parsed?.MessageType === 'ShipStaticData') {
-      // Cache ShipType + ShipName by MMSI so subsequent PositionReports
-      // can classify the vessel as a tanker. AISStream broadcasts static
-      // data ~every 6 min per vessel; in steady state the cache covers
-      // most active MMSIs within minutes of relay startup.
+      // Class A static/voyage data (AIS type 5).
       if (processShipStaticDataForMeta(parsed)) acceptedType = 'static';
+    } else if (parsed?.MessageType === 'StaticDataReport') {
+      // Class B static data (AIS type 24). Part B carries ShipType.
+      if (processStaticDataReportForMeta(parsed)) acceptedType = 'static';
     }
   } catch {
     // Ignore malformed upstream payloads
@@ -8134,12 +8138,110 @@ function processShipStaticDataForMeta(data) {
   // because the second write replaces the first with shipType=0.
   const shipType = Number(sd.Type);
   if (!Number.isFinite(shipType) || shipType <= 0) return false;
+  const shipName = (sd.Name || meta.ShipName || '').trim();
   vesselMeta.set(mmsi, {
     shipType,
-    shipName: (sd.Name || meta.ShipName || '').trim(),
+    shipName,
     lastSeen: Date.now(),
   });
+  syncKnownVesselType(mmsi, shipType, shipName);
   return true;
+}
+
+function syncKnownVesselType(mmsi, shipType, shipName = '') {
+  const vessel = vessels.get(mmsi);
+  if (!vessel) return;
+
+  vessel.shipType = shipType;
+  if (shipName) vessel.name = shipName;
+  vessels.set(mmsi, vessel);
+
+  if (shipType >= 80 && shipType <= 89) {
+    tankerReports.set(mmsi, {
+      mmsi,
+      name: shipName || vessel.name || '',
+      lat: vessel.lat,
+      lon: vessel.lon,
+      shipType,
+      heading: vessel.heading,
+      speed: vessel.speed,
+      course: vessel.course,
+      timestamp: vessel.timestamp,
+    });
+  } else {
+    tankerReports.delete(mmsi);
+  }
+}
+
+function processStaticDataReportForMeta(data) {
+  const meta = data?.MetaData || {};
+  const sd = data?.Message?.StaticDataReport;
+  if (!sd) return false;
+
+  const mmsi = String(meta.MMSI || sd.UserID || '');
+  if (!mmsi) return false;
+
+  const shipType = Number(sd?.ReportB?.ShipType);
+  if (!Number.isFinite(shipType) || shipType <= 0) return false;
+
+  const existing = vesselMeta.get(mmsi);
+  const shipName = String(
+    sd?.ReportA?.Name || meta.ShipName || existing?.shipName || ''
+  ).trim();
+
+  vesselMeta.set(mmsi, {
+    shipType,
+    shipName,
+    lastSeen: Date.now(),
+  });
+  syncKnownVesselType(mmsi, shipType, shipName);
+  return true;
+}
+
+function normalizeClassBPositionEnvelope(data, report, shipName = '') {
+  const meta = data?.MetaData || {};
+  return {
+    ...data,
+    MetaData: {
+      ...meta,
+      MMSI: meta.MMSI || report?.UserID,
+      ShipName: meta.ShipName || shipName || '',
+    },
+    Message: {
+      PositionReport: report,
+    },
+  };
+}
+
+function processStandardClassBPositionReportForSnapshot(data) {
+  const report = data?.Message?.StandardClassBPositionReport;
+  if (!report) return false;
+  return processPositionReportForSnapshot(
+    normalizeClassBPositionEnvelope(data, report),
+  );
+}
+
+function processExtendedClassBPositionReportForSnapshot(data) {
+  const meta = data?.MetaData || {};
+  const report = data?.Message?.ExtendedClassBPositionReport;
+  if (!report) return false;
+
+  const mmsi = String(meta.MMSI || report.UserID || '');
+  const shipType = Number(report.Type);
+  const shipName = String(report.Name || meta.ShipName || '').trim();
+
+  if (mmsi && Number.isFinite(shipType) && shipType > 0) {
+    vesselMeta.set(mmsi, {
+      shipType,
+      shipName,
+      lastSeen: Date.now(),
+    });
+    syncKnownVesselType(mmsi, shipType, shipName);
+  }
+
+  return processPositionReportForSnapshot(
+    normalizeClassBPositionEnvelope(data, report, shipName),
+  );
 }
 
 function processPositionReportForSnapshot(data) {
@@ -10682,6 +10784,8 @@ const server = http.createServer(async (req, res) => {
       connected: upstreamSocket?.readyState === WebSocket.OPEN,
       upstreamPaused,
       vessels: vessels.size,
+      vesselMetadata: vesselMeta.size,
+      tankerReports: tankerReports.size,
       densityZones: Array.from(densityGrid.values()).filter(c => c.vessels.size >= 2).length,
       telegram: {
         enabled: TELEGRAM_ENABLED,
@@ -12920,7 +13024,13 @@ function connectUpstream() {
       // tankerReports never populates. Static data is broadcast every ~6
       // min per vessel (ITU-R M.1371), so the volume add is small relative
       // to PositionReport (which broadcasts every 2-10s underway).
-      FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
+      FilterMessageTypes: [
+        'PositionReport',
+        'StandardClassBPositionReport',
+        'ExtendedClassBPositionReport',
+        'ShipStaticData',
+        'StaticDataReport',
+      ],
     }));
   });
 

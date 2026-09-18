@@ -118,6 +118,7 @@ const SOURCE_DOMAIN_OVERRIDES = new Map([
   ['api.usaspending.gov', 'finance'],
   ['api.windy.com', 'environment'],
   ['archive-api.open-meteo.com', 'environment'],
+  ['geocoding-api.open-meteo.com', 'environment'],
   ['British Geological Survey World Mineral Statistics', 'energy'],
   ['Bank of Canada', 'finance'],
   ['bothsidesofthetable.com', 'technology'],

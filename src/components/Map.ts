@@ -408,50 +408,91 @@ export class MapComponent {
 
   private createTimeSlider(): HTMLElement {
     const slider = document.createElement('div');
-    slider.className = 'time-slider';
+    const headerSelect = document.getElementById('rasadyarMapTimeSelect') as HTMLSelectElement | null;
+    if (headerSelect) {
+      headerSelect.value = this.state.timeRange;
+      slider.hidden = true;
+      slider.className = 'rasadyar-time-range-placeholder';
+      return slider;
+    }
+    slider.className = 'time-slider rasadyar-time-range';
     slider.id = 'timeSlider';
+    slider.setAttribute('dir', 'rtl');
+    slider.style.cssText = [
+      'position:absolute',
+      'top:4px',
+      'left:50%',
+      'right:auto',
+      'bottom:auto',
+      'transform:translateX(-50%)',
+      'z-index:90',
+      'display:flex',
+      'align-items:center',
+      'gap:8px',
+      'width:auto',
+      'min-width:0',
+      'height:38px',
+      'padding:0 9px',
+      'margin:0',
+      'border:1px solid rgba(45,212,191,.24)',
+      'border-radius:10px',
+      'background:rgba(5,18,15,.94)',
+      'box-shadow:0 8px 24px rgba(0,0,0,.26)',
+      'backdrop-filter:blur(10px)',
+      'font-family:inherit',
+    ].join(';');
 
-    const ranges: { value: TimeRange; label: string }[] = [
-      { value: '1h', label: '1H' },
-      { value: '6h', label: '6H' },
-      { value: '24h', label: '24H' },
-      { value: '48h', label: '48H' },
-      { value: '7d', label: '7D' },
-      { value: 'all', label: 'ALL' },
+    const label = document.createElement('span');
+    label.textContent = 'بازه زمانی';
+    label.style.cssText = 'color:#9fb4ae;font-size:11px;font-weight:600;white-space:nowrap;';
+
+    const select = document.createElement('select');
+    select.className = 'rasadyar-time-range-select';
+    select.setAttribute('aria-label', 'بازه زمانی نقشه');
+    select.style.cssText = [
+      'height:28px',
+      'min-width:98px',
+      'padding:0 8px',
+      'border:1px solid rgba(45,212,191,.34)',
+      'border-radius:8px',
+      'outline:none',
+      'background:#0a1c18',
+      'color:#d9f5ec',
+      'font-family:inherit',
+      'font-size:11px',
+      'font-weight:700',
+      'cursor:pointer',
+      'direction:rtl',
+    ].join(';');
+
+    const ranges: Array<{ value: TimeRange; label: string }> = [
+      { value: '1h', label: '۱ ساعت' },
+      { value: '6h', label: '۶ ساعت' },
+      { value: '24h', label: '۲۴ ساعت' },
+      { value: '48h', label: '۴۸ ساعت' },
+      { value: '7d', label: '۷ روز' },
+      { value: 'all', label: 'همه داده‌ها' },
     ];
-
-    setTrustedHtml(slider, trustedHtml(`
-      <span class="time-slider-label">TIME RANGE</span>
-      <div class="time-slider-buttons">
-        ${ranges
-        .map(
-          (r) =>
-            `<button class="time-btn ${this.state.timeRange === r.value ? 'active' : ''}" data-range="${r.value}">${r.label}</button>`
-        )
-        .join('')}
-      </div>
-    `, "legacy direct innerHTML migration"));
-
-    slider.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement;
-      if (target.classList.contains('time-btn')) {
-        const range = target.dataset.range as TimeRange;
-        this.setTimeRange(range);
-        slider.querySelectorAll('.time-btn').forEach((btn) => btn.classList.remove('active'));
-        target.classList.add('active');
-      }
+    for (const item of ranges) {
+      const option = document.createElement('option');
+      option.value = item.value;
+      option.textContent = item.label;
+      select.appendChild(option);
+    }
+    select.value = this.state.timeRange;
+    select.addEventListener('change', () => {
+      this.setTimeRange(select.value as TimeRange);
     });
 
+    slider.append(label, select);
     return slider;
   }
 
   private updateTimeSliderButtons(): void {
-    const slider = this.container.querySelector('#timeSlider');
-    if (!slider) return;
-    slider.querySelectorAll('.time-btn').forEach((btn) => {
-      const range = (btn as HTMLElement).dataset.range as TimeRange | undefined;
-      btn.classList.toggle('active', range === this.state.timeRange);
-    });
+    const headerSelect = document.getElementById('rasadyarMapTimeSelect') as HTMLSelectElement | null;
+    if (headerSelect) headerSelect.value = this.state.timeRange;
+    const select = this.container.querySelector('#timeSlider .rasadyar-time-range-select') as HTMLSelectElement | null;
+    if (select) select.value = this.state.timeRange;
   }
 
   public setTimeRange(range: TimeRange): void {
@@ -489,6 +530,9 @@ export class MapComponent {
     const toggles = document.createElement('div');
     toggles.className = 'layer-toggles';
     toggles.id = 'layerToggles';
+    toggles.style.top = '10px';
+    toggles.style.bottom = 'auto';
+    toggles.style.zIndex = '50';
 
     // Variant-aware layer buttons
     const fullLayers: (keyof MapLayers)[] = [

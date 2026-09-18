@@ -12,7 +12,7 @@ The inventory is **generated, not hand-written**: `scripts/source-attribution.mj
 ## Observed Source Inventory
 
 {/* BEGIN GENERATED SOURCE ATTRIBUTION */}
-This generated inventory covers **749 active source hosts** representing **743 active providers** (**318 structured/API**, **463 feed**, and **30 operational-status** hosts). It is derived from source declarations in `scripts/`, `server/`, `api/`, and `src/`. Each row shows the configured provider identity and where the source is referenced. Syndication transports such as FeedBurner and Google News remain listed as hosts and are not counted as publishers.
+This generated inventory covers **750 active source hosts** representing **744 active providers** (**319 structured/API**, **463 feed**, and **30 operational-status** hosts). It is derived from source declarations in `scripts/`, `server/`, `api/`, and `src/`. Each row shows the configured provider identity and where the source is referenced. Syndication transports such as FeedBurner and Google News remain listed as hosts and are not counted as publishers.
 
 | Provider | Observed surface |
 | --- | --- |
@@ -226,7 +226,7 @@ This generated inventory covers **749 active source hosts** representing **743 a
 | en.wikipedia.org (en.wikipedia.org) | structured — scripts/seed-sovereign-wealth.mjs, server/worldmonitor/intelligence/v1/get-country-facts.ts |
 | Enab Baladi English (english.enabbaladi.net) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | energy.ec.europa.eu (energy.ec.europa.eu) | structured — scripts/backfill-fuel-prices-prev.mjs, scripts/seed-fuel-prices.mjs |
-| energy.worldmonitor.app (energy.worldmonitor.app) | structured — src/app/panel-layout.ts, src/config/variant-meta.ts |
+| energy.worldmonitor.app (energy.worldmonitor.app) | structured — src/config/variant-meta.ts |
 | eng.lsm.lv (eng.lsm.lv) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | english.alarabiya.net (english.alarabiya.net) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | english.customs.gov.cn (english.customs.gov.cn) | structured — scripts/china-macro/source-contracts.mjs |
@@ -287,10 +287,11 @@ This generated inventory covers **749 active source hosts** representing **743 a
 | Gazeta Wyborcza (wyborcza.pl) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | gcaptain.com (gcaptain.com) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | geo.tv (geo.tv) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
+| geocoding-api.open-meteo.com (geocoding-api.open-meteo.com) | structured — src/components/LiveWebcamsPanel.ts |
 | geospatial-usace.opendata.arcgis.com (geospatial-usace.opendata.arcgis.com) | structured — scripts/fetch-mirta-bases.mjs |
 | ghoapi.azureedge.net (ghoapi.azureedge.net) | structured — scripts/seed-resilience-static.mjs |
 | github.blog (github.blog) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
-| github.com (github.com) | structured — api/download.js, scripts/generate-airline-codes.mjs, scripts/seed-research.mjs, src/app/desktop-updater.ts, +2 more |
+| github.com (github.com) | structured — api/download.js, scripts/generate-airline-codes.mjs, scripts/seed-research.mjs, src/app/desktop-updater.ts, +4 more |
 | Global Affairs Canada (SEMA consolidated sanctions) (www.international.gc.ca) | structured — scripts/_sema-sanctions.mjs |
 | Global Energy Monitor (globalenergymonitor.org) | structured — scripts/import-gem-pipelines.mjs, src/components/PipelineStatusPanel.ts, src/components/StorageFacilityMapPanel.ts |
 | globalinitiative.net (globalinitiative.net) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
@@ -655,7 +656,7 @@ This generated inventory covers **749 active source hosts** representing **743 a
 | warontherocks.com (warontherocks.com) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | web.archive.org (web.archive.org) | structured — scripts/seed-fatf-listing.mjs |
 | web.cbr.ru (web.cbr.ru) | structured — scripts/seed-cbr-rates.mjs |
-| webcams.windy.com (webcams.windy.com) | structured — src/components/PinnedWebcamsPanel.ts |
+| webcams.windy.com (webcams.windy.com) | structured — src/components/LiveWebcamsPanel.ts, src/components/PinnedWebcamsPanel.ts |
 | websummit.com (websummit.com) | structured — scripts/ais-relay.cjs, scripts/seed-research.mjs, server/worldmonitor/research/v1/list-tech-events.ts |
 | Welt (www.welt.de) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | whitehouse.gov (whitehouse.gov) | feed — src/config/feeds.ts |
@@ -888,7 +889,7 @@ This generated inventory covers **749 active source hosts** representing **743 a
 | www.weather.gov.hk (www.weather.gov.hk) | structured — scripts/natural/western-pacific-cyclones.mjs |
 | www.whitehouse.gov (www.whitehouse.gov) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | www.who.int (www.who.int) | feed+structured — scripts/seed-disease-outbreaks.mjs, scripts/seed-security-advisories.mjs, server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
-| www.windy.com (www.windy.com) | structured — server/worldmonitor/webcam/v1/get-webcam-image.ts, src/services/webcams/index.ts |
+| www.windy.com (www.windy.com) | structured — server/worldmonitor/webcam/v1/get-webcam-image.ts, src/components/LiveWebcamsPanel.ts, src/services/webcams/index.ts |
 | www.winnipegfreepress.com (www.winnipegfreepress.com) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |
 | www.ycombinator.com (www.ycombinator.com) | feed+structured — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts, src/config/variants/tech.ts |
 | www.yesmagazine.org (www.yesmagazine.org) | feed — server/worldmonitor/news/v1/_feeds.ts, src/config/feeds.ts |

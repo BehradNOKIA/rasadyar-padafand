@@ -210,6 +210,7 @@ const HOST_ORIGINS = Object.freeze({
   'api.windy.com': 'CZ',
   'api.x.com': 'US',
   'archive-api.open-meteo.com': 'DE',
+  'geocoding-api.open-meteo.com': 'DE',
   'asharq.com': 'SA',
   'asharqbusiness.com': 'SA',
   'astanatimes.com': 'KZ',

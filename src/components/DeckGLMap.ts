@@ -2792,24 +2792,23 @@ export class DeckGLMap {
       this.layerCache.delete('fuel-shortages-layer');
     }
 
-    // Live tanker positions inside chokepoint bounding boxes. AIS ship type
-    // 80-89 (tanker class). Refreshed every 60s; one Map<chokepointId, ...>
-    // fetch per layer-tick. renderers: ['deck'] per src/config/map-layer-definitions.ts.
-    // Powered by the relay's tankerReports field (added in PR 3 U7 alongside
-    // the existing military-only candidateReports). Energy Atlas parity-push.
-    if (mapLayers.liveTankers) {
-      // Start (or keep) the refresh loop while the layer is on. The
-      // ensure helper handles the "first time on" kick + the 60s
-      // setInterval; idempotent so calling it on every layers update is
-      // safe. Render immediately if we already have data; the interval
-      // re-renders when fresh data arrives.
+    // Live tanker positions inside chokepoint bounding boxes. The public AIS
+    // traffic layer already showed density/disruption signals + strategic ports,
+    // which made the "ship traffic" toggle look like a ports-only layer when
+    // density data was sparse. Reuse the existing live-tanker feed whenever AIS
+    // traffic is enabled so the map also contains real vessel positions. This is
+    // intentionally limited to tanker-class AIS reports supplied by the current
+    // backend; it does not pretend to be an all-vessel global AIS feed.
+    const shouldRenderLiveTankers = mapLayers.liveTankers || mapLayers.ais;
+    if (shouldRenderLiveTankers) {
+      // Start (or keep) the refresh loop while either maritime view needs it.
+      // The helper is idempotent, so this remains a single 60s refresh loop.
       this.ensureLiveTankersLoop();
       if (this.liveTankers.length > 0) {
         layers.push(this.createLiveTankersLayer());
       }
     } else {
-      // Layer toggled off → tear down the timer so we stop hitting the
-      // relay even when the map is still on screen.
+      // Neither layer needs live tanker traffic: stop relay work and clear cache.
       this.stopLiveTankersLoop();
       this.layerCache.delete('live-tankers-layer');
     }
@@ -4447,21 +4446,20 @@ export class DeckGLMap {
       id: 'live-tankers-layer',
       data: this.liveTankers,
       getPosition: (d) => [d.lon, d.lat],
-      // Radius scales loosely with deadweight class: VLCC > Aframax > Handysize.
-      // AIS ship type 80-89 covers all tanker subtypes; we have no DWT field
-      // in the AIS message itself, so this is a constant fallback. Future
-      // enhancement: enrich via a vessel-registry lookup.
+      // Tanker-class AIS reports (ship type 80-89). Keep markers compact but
+      // visibly distinct from ports and density zones.
       getRadius: 2500,
       getFillColor: (d) => {
-        // Anchored (speed < 0.5 kn) — orange, signals waiting / loading /
-        // potential congestion. Underway (speed >= 0.5 kn) — cyan, normal
-        // transit. Unknown / missing speed — gray.
-        if (!Number.isFinite(d.speed)) return [127, 140, 141, 200] as [number, number, number, number];
-        if (d.speed < 0.5) return [255, 183, 3, 220] as [number, number, number, number]; // amber
-        return [0, 209, 255, 220] as [number, number, number, number]; // cyan
+        // Anchored / near-stationary = amber; underway = cyan; unknown = gray.
+        if (!Number.isFinite(d.speed)) return [127, 140, 141, 225] as [number, number, number, number];
+        if (d.speed < 0.5) return [255, 183, 3, 235] as [number, number, number, number];
+        return [0, 209, 255, 235] as [number, number, number, number];
       },
-      radiusMinPixels: 3,
-      radiusMaxPixels: 8,
+      getLineColor: [235, 255, 252, 230],
+      stroked: true,
+      lineWidthMinPixels: 1,
+      radiusMinPixels: 4,
+      radiusMaxPixels: 9,
       pickable: true,
     });
   }
@@ -5767,6 +5765,11 @@ export class DeckGLMap {
         return { html: `<div class="deckgl-tooltip"><strong>${text(obj.stormName)}</strong><br/>Past Track (${obj.windKt} kt)</div>` };
       case 'storm-cone-layer':
         return { html: `<div class="deckgl-tooltip"><strong>${text(obj.stormName)}</strong><br/>Forecast Cone</div>` };
+      case 'live-tankers-layer': {
+        const speedLabel = Number.isFinite(obj.speed) ? `${Number(obj.speed).toFixed(1)} kn` : '—';
+        const vesselName = obj.name || obj.mmsi || 'Live tanker';
+        return { html: `<div class="deckgl-tooltip"><strong>🚢 ${text(vesselName)}</strong><br/>MMSI: ${text(obj.mmsi || '—')} · ${text(speedLabel)}<br/><span style="opacity:.7">Live tanker AIS position</span></div>` };
+      }
       case 'ais-density-layer':
         return { html: `<div class="deckgl-tooltip"><strong>${t('components.deckgl.layers.shipTraffic')}</strong><br/>${t('popups.intensity')}: ${text(obj.intensity)}</div>` };
       case 'waterways-layer':
@@ -6446,40 +6449,96 @@ export class DeckGLMap {
 
   private createTimeSlider(): void {
     const slider = document.createElement('div');
-    slider.className = 'time-slider deckgl-time-slider';
-    setTrustedHtml(slider, trustedHtml(`
-      <div class="time-options">
-        <button class="time-btn ${this.state.timeRange === '1h' ? 'active' : ''}" data-range="1h">1h</button>
-        <button class="time-btn ${this.state.timeRange === '6h' ? 'active' : ''}" data-range="6h">6h</button>
-        <button class="time-btn ${this.state.timeRange === '24h' ? 'active' : ''}" data-range="24h">24h</button>
-        <button class="time-btn ${this.state.timeRange === '48h' ? 'active' : ''}" data-range="48h">48h</button>
-        <button class="time-btn ${this.state.timeRange === '7d' ? 'active' : ''}" data-range="7d">7d</button>
-        <button class="time-btn ${this.state.timeRange === 'all' ? 'active' : ''}" data-range="all">${t('components.deckgl.timeAll')}</button>
-      </div>
-    `, "legacy direct innerHTML migration"));
+    const headerSelect = document.getElementById('rasadyarMapTimeSelect') as HTMLSelectElement | null;
+    if (headerSelect) {
+      headerSelect.value = this.state.timeRange;
+      return;
+    }
+    slider.className = 'time-slider deckgl-time-slider rasadyar-time-range';
+    slider.setAttribute('dir', 'rtl');
+    slider.style.cssText = [
+      'position:absolute',
+      'top:4px',
+      'left:50%',
+      'right:auto',
+      'bottom:auto',
+      'transform:translateX(-50%)',
+      'z-index:90',
+      'display:flex',
+      'align-items:center',
+      'gap:8px',
+      'width:auto',
+      'min-width:0',
+      'height:38px',
+      'padding:0 9px',
+      'margin:0',
+      'border:1px solid rgba(45,212,191,.24)',
+      'border-radius:10px',
+      'background:rgba(5,18,15,.94)',
+      'box-shadow:0 8px 24px rgba(0,0,0,.26)',
+      'backdrop-filter:blur(10px)',
+      'font-family:inherit',
+    ].join(';');
 
-    this.container.appendChild(slider);
+    const label = document.createElement('span');
+    label.textContent = 'بازه زمانی';
+    label.style.cssText = 'color:#9fb4ae;font-size:11px;font-weight:600;white-space:nowrap;';
 
-    slider.querySelectorAll('.time-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const range = (btn as HTMLElement).dataset.range as TimeRange;
-        this.setTimeRange(range);
-      });
+    const select = document.createElement('select');
+    select.className = 'rasadyar-time-range-select';
+    select.setAttribute('aria-label', 'بازه زمانی نقشه');
+    select.style.cssText = [
+      'height:28px',
+      'min-width:98px',
+      'padding:0 8px',
+      'border:1px solid rgba(45,212,191,.34)',
+      'border-radius:8px',
+      'outline:none',
+      'background:#0a1c18',
+      'color:#d9f5ec',
+      'font-family:inherit',
+      'font-size:11px',
+      'font-weight:700',
+      'cursor:pointer',
+      'direction:rtl',
+    ].join(';');
+
+    const ranges: Array<{ value: TimeRange; label: string }> = [
+      { value: '1h', label: '۱ ساعت' },
+      { value: '6h', label: '۶ ساعت' },
+      { value: '24h', label: '۲۴ ساعت' },
+      { value: '48h', label: '۴۸ ساعت' },
+      { value: '7d', label: '۷ روز' },
+      { value: 'all', label: 'همه داده‌ها' },
+    ];
+    for (const item of ranges) {
+      const option = document.createElement('option');
+      option.value = item.value;
+      option.textContent = item.label;
+      select.appendChild(option);
+    }
+    select.value = this.state.timeRange;
+    select.addEventListener('change', () => {
+      this.setTimeRange(select.value as TimeRange);
     });
+
+    slider.append(label, select);
+    this.container.appendChild(slider);
   }
 
   private updateTimeSliderButtons(): void {
-    const slider = this.container.querySelector('.deckgl-time-slider');
-    if (!slider) return;
-    slider.querySelectorAll('.time-btn').forEach((btn) => {
-      const range = (btn as HTMLElement).dataset.range as TimeRange | undefined;
-      btn.classList.toggle('active', range === this.state.timeRange);
-    });
+    const headerSelect = document.getElementById('rasadyarMapTimeSelect') as HTMLSelectElement | null;
+    if (headerSelect) headerSelect.value = this.state.timeRange;
+    const select = this.container.querySelector('.deckgl-time-slider .rasadyar-time-range-select') as HTMLSelectElement | null;
+    if (select) select.value = this.state.timeRange;
   }
 
   private createLayerToggles(): void {
     const toggles = document.createElement('div');
     toggles.className = 'layer-toggles deckgl-layer-toggles';
+    toggles.style.top = '10px';
+    toggles.style.bottom = 'auto';
+    toggles.style.zIndex = '50';
 
     const layerDefs = getLayersForVariant((SITE_VARIANT || 'full') as MapVariant, 'deck');
     const premiumUnlocked = hasPremiumAccess(getAuthState());
@@ -6515,12 +6574,6 @@ export class DeckGLMap {
         }).join('')}
       </div>
     `, "legacy direct innerHTML migration"));
-
-    const authorBadge = document.createElement('div');
-    authorBadge.className = 'map-author-badge';
-    authorBadge.textContent = '© Elie Habib · Someone™';
-    toggles.appendChild(authorBadge);
-
     this.container.appendChild(toggles);
 
     const lockedLayerControls = layerConfig
