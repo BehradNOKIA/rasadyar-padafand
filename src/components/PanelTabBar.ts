@@ -429,6 +429,22 @@ export class PanelTabBar {
 
       this.updateRasadyarNavState();
 
+      const directEventBySection: Partial<Record<RasadyarNavKey, string>> = {
+        smart-analysis: 'rasadyar:open-analysis-center',
+        reports: 'rasadyar:open-report-center',
+        settings: 'rasadyar:open-system-settings',
+      };
+
+      const directEvent = directEventBySection[item.key];
+
+      if (directEvent) {
+        window.dispatchEvent(
+          new CustomEvent(directEvent),
+        );
+
+        return;
+      }
+
       window.dispatchEvent(
         new CustomEvent<RasadyarNavigateDetail>('rasadyar:navigate', {
           detail: { section: item.key },
