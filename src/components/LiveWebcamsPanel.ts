@@ -1,898 +1,1495 @@
+// RASADYAR_WEBCAM_WINDY_PLAYER_V5
 import { Panel } from './Panel';
-import { IDLE_PAUSE_MS, STORAGE_KEYS } from '@/config';
-import { isDesktopRuntime, getLocalApiPort } from '@/services/runtime';
-import { escapeHtml } from '@/utils/sanitize';
 import { t } from '../services/i18n';
-import { track, trackWebcamSelected, trackWebcamRegionFiltered } from '@/services/analytics';
-import { getStreamQuality, subscribeStreamQualityChange } from '@/services/ai-flow-settings';
-import { isMobileDevice, loadFromStorage, saveToStorage } from '@/utils';
-import { playAllLiveMedia, registerLiveMediaStarter, unregisterLiveMediaStarter, type LiveMediaStopReason } from '@/services/live-media-controller';
-import { getLiveStreamsAlwaysOn, subscribeLiveStreamsSettingsChange } from '@/services/live-stream-settings';
-import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
-import { isAllowedWebcamEmbedMessageOrigin } from './_live-webcams-origin';
+import {
+  fetchWebcams,
+  fetchWebcamImage,
+  type WebcamEntry,
+  type GetWebcamImageResponse,
+} from '@/services/webcams';
 
+type RegionFilter = 'all' | 'middle-east' | 'europe' | 'americas' | 'asia' | 'space';
+type ViewMode = 'grid' | 'single';
+type SourceMode = 'windy' | 'youtube';
+type StatusKind = 'idle' | 'loading' | 'success' | 'warning' | 'error';
 
-type WebcamRegion = 'middle-east' | 'europe' | 'asia' | 'americas' | 'space';
+interface SearchLocation {
+  name: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+}
 
-interface WebcamFeed {
+interface AnchorLocation {
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
+interface RegionPreset {
+  label: string;
+  anchors?: AnchorLocation[];
+}
+
+interface CameraResult {
+  id: string;
+  title: string;
+  country: string;
+  category: string;
+  latitude: number | null;
+  longitude: number | null;
+  distanceKm: number | null;
+  playerUrl: string | null;
+  thumbnailUrl: string | null;
+  sourceUrl: string | null;
+  sourceName: 'Windy' | 'YouTube';
+  youtubeVideoId: string | null;
+  moving: boolean;
+  lastUpdated: string | null;
+}
+
+interface YouTubeFeed {
   id: string;
   city: string;
   country: string;
-  region: WebcamRegion;
-  channelHandle: string;
-  fallbackVideoId: string;
+  region: RegionFilter;
+  videoId: string;
+  aliases: string[];
 }
 
-// Verified YouTube live stream IDs — validated Feb 2026 via title cross-check.
-// IDs may rotate; update when stale.
-const WEBCAM_FEEDS: WebcamFeed[] = [
-  // Middle East — Jerusalem & Tehran adjacent (conflict hotspots)
-  { id: 'jerusalem', city: 'Jerusalem', country: 'Israel', region: 'middle-east', channelHandle: '@TheWesternWall', fallbackVideoId: 'e34xb-Fbl0U' },
-  { id: 'middle-east', city: 'Middle East', country: 'Multi', region: 'middle-east', channelHandle: '@MiddleEastCams', fallbackVideoId: 'oxT5R6I0N6E' },
-  { id: 'tel-aviv', city: 'Tel Aviv', country: 'Israel', region: 'middle-east', channelHandle: '@IsraelLiveCam', fallbackVideoId: 'gmtlJ_m2r5A' },
-  { id: 'mecca', city: 'Mecca', country: 'Saudi Arabia', region: 'middle-east', channelHandle: '@MakkahLive', fallbackVideoId: 'kJwEsQTegxk' },
-  { id: 'beirut-mtv', city: 'Beirut', country: 'Lebanon', region: 'middle-east', channelHandle: '@MTVLebanonNews', fallbackVideoId: 'djF-Lkgfp6k' },
-  // Europe
-  { id: 'kyiv', city: 'Kyiv', country: 'Ukraine', region: 'europe', channelHandle: '@DWNews', fallbackVideoId: '-Q7FuPINDjA' },
-  { id: 'odessa', city: 'Odessa', country: 'Ukraine', region: 'europe', channelHandle: '@UkraineLiveCam', fallbackVideoId: 'e2gC37ILQmk' },
-  { id: 'paris', city: 'Paris', country: 'France', region: 'europe', channelHandle: '@PalaisIena', fallbackVideoId: 'OzYp4NRZlwQ' },
-  { id: 'st-petersburg', city: 'St. Petersburg', country: 'Russia', region: 'europe', channelHandle: '@SPBLiveCam', fallbackVideoId: 'CjtIYbmVfck' },
-  { id: 'london', city: 'London', country: 'UK', region: 'europe', channelHandle: '@EarthCam', fallbackVideoId: 'Lxqcg1qt0XU' },
-  // Americas
-  { id: 'washington', city: 'Washington DC', country: 'USA', region: 'americas', channelHandle: '@AxisCommunications', fallbackVideoId: '1wV9lLe14aU' },
-  { id: 'new-york', city: 'New York', country: 'USA', region: 'americas', channelHandle: '@EarthCam', fallbackVideoId: '4qyZLflp-sI' },
-  { id: 'los-angeles', city: 'Los Angeles', country: 'USA', region: 'americas', channelHandle: '@VeniceVHotel', fallbackVideoId: 'EO_1LWqsCNE' },
-  { id: 'miami', city: 'Miami', country: 'USA', region: 'americas', channelHandle: '@FloridaLiveCams', fallbackVideoId: '5YCajRjvWCg' },
-  // Asia-Pacific — Taipei first (strait hotspot), then Shanghai, Tokyo, Seoul
-  { id: 'taipei', city: 'Taipei', country: 'Taiwan', region: 'asia', channelHandle: '@JackyWuTaipei', fallbackVideoId: 'z_fY1pj1VBw' },
-  { id: 'shanghai', city: 'Shanghai', country: 'China', region: 'asia', channelHandle: '@SkylineWebcams', fallbackVideoId: '76EwqI5XZIc' },
-  { id: 'tokyo', city: 'Tokyo', country: 'Japan', region: 'asia', channelHandle: '@TokyoLiveCam4K', fallbackVideoId: '_k-5U7IeK8g' },
-  { id: 'seoul', city: 'Seoul', country: 'South Korea', region: 'asia', channelHandle: '@UNvillage_live', fallbackVideoId: '-JhoMGoAfFc' },
-  { id: 'sydney', city: 'Sydney', country: 'Australia', region: 'asia', channelHandle: '@WebcamSydney', fallbackVideoId: '7pcL-0Wo77U' },
-  // Space
-  { id: 'iss-earth', city: 'ISS Earth View', country: 'Space', region: 'space', channelHandle: '@NASA', fallbackVideoId: 'vytmBNhc9ig' },
-  { id: 'nasa-live', city: 'NASA TV', country: 'Space', region: 'space', channelHandle: '@NASA', fallbackVideoId: 'zPH5KtjJFaQ' },
-  { id: 'space-x', city: 'SpaceX', country: 'Space', region: 'space', channelHandle: '@SpaceX', fallbackVideoId: 'fO9e9jnhYK8' },
-  { id: 'space-walk', city: 'Space', country: 'Space', region: 'space', channelHandle: '@NASA', fallbackVideoId: 'fO9e9jnhYK8' },
+const OPEN_METEO_GEOCODING_URL = 'https://geocoding-api.open-meteo.com/v1/search';
+const WINDY_PLAYER_FALLBACK = 'https://webcams.windy.com/webcams/public/embed/player';
+
+const SEARCH_PRIMARY_RADIUS_KM = 100;
+const SEARCH_FALLBACK_RADIUS_KM = 300;
+const SEARCH_RESULT_LIMIT = 8;
+const GRID_LIMIT = 4;
+
+// The project itself caches Windy image/player data for 9 minutes.
+// Refresh slightly after that cache expires, but before a 10-minute token can become stale.
+const WINDY_PLAYER_REFRESH_MS = 9 * 60 * 1000 + 20 * 1000;
+
+const REGION_PRESETS: Record<RegionFilter, RegionPreset> = {
+  all: {
+    label: 'همه',
+    anchors: [
+      { name: 'Tehran', latitude: 35.6892, longitude: 51.3890 },
+      { name: 'Jerusalem', latitude: 31.7683, longitude: 35.2137 },
+      { name: 'Kyiv', latitude: 50.4501, longitude: 30.5234 },
+      { name: 'Washington DC', latitude: 38.9072, longitude: -77.0369 },
+    ],
+  },
+  'middle-east': {
+    label: 'خاورمیانه',
+    anchors: [
+      { name: 'Tehran', latitude: 35.6892, longitude: 51.3890 },
+      { name: 'Jerusalem', latitude: 31.7683, longitude: 35.2137 },
+      { name: 'Beirut', latitude: 33.8938, longitude: 35.5018 },
+      { name: 'Dubai', latitude: 25.2048, longitude: 55.2708 },
+    ],
+  },
+  europe: {
+    label: 'اروپا',
+    anchors: [
+      { name: 'Kyiv', latitude: 50.4501, longitude: 30.5234 },
+      { name: 'Paris', latitude: 48.8566, longitude: 2.3522 },
+      { name: 'London', latitude: 51.5074, longitude: -0.1278 },
+      { name: 'Warsaw', latitude: 52.2297, longitude: 21.0122 },
+    ],
+  },
+  americas: {
+    label: 'قاره آمریکا',
+    anchors: [
+      { name: 'New York', latitude: 40.7128, longitude: -74.0060 },
+      { name: 'Washington DC', latitude: 38.9072, longitude: -77.0369 },
+      { name: 'Los Angeles', latitude: 34.0522, longitude: -118.2437 },
+      { name: 'Miami', latitude: 25.7617, longitude: -80.1918 },
+    ],
+  },
+  asia: {
+    label: 'آسیا',
+    anchors: [
+      { name: 'Tokyo', latitude: 35.6762, longitude: 139.6503 },
+      { name: 'Seoul', latitude: 37.5665, longitude: 126.9780 },
+      { name: 'Taipei', latitude: 25.0330, longitude: 121.5654 },
+      { name: 'Singapore', latitude: 1.3521, longitude: 103.8198 },
+    ],
+  },
+  space: {
+    label: 'فضا',
+  },
+};
+
+const REGION_ORDER: RegionFilter[] = ['all', 'middle-east', 'europe', 'americas', 'asia', 'space'];
+
+const YOUTUBE_FEEDS: YouTubeFeed[] = [
+  { id: 'jerusalem', city: 'Jerusalem', country: 'Israel', region: 'middle-east', videoId: 'e34xb-Fbl0U', aliases: ['jerusalem', 'اورشلیم', 'بیت المقدس', 'بیت‌المقدس', 'قدس'] },
+  { id: 'middle-east', city: 'Middle East', country: 'Multi', region: 'middle-east', videoId: 'oxT5R6I0N6E', aliases: ['middle east', 'خاورمیانه'] },
+  { id: 'tel-aviv', city: 'Tel Aviv', country: 'Israel', region: 'middle-east', videoId: 'gmtlJ_m2r5A', aliases: ['tel aviv', 'تل آویو', 'تل‌آویو'] },
+  { id: 'mecca', city: 'Mecca', country: 'Saudi Arabia', region: 'middle-east', videoId: 'kJwEsQTegxk', aliases: ['mecca', 'makkah', 'مکه'] },
+  { id: 'beirut', city: 'Beirut', country: 'Lebanon', region: 'middle-east', videoId: 'djF-Lkgfp6k', aliases: ['beirut', 'بیروت'] },
+  { id: 'kyiv', city: 'Kyiv', country: 'Ukraine', region: 'europe', videoId: '-Q7FuPINDjA', aliases: ['kyiv', 'kiev', 'کیف', 'کی‌یف'] },
+  { id: 'odessa', city: 'Odessa', country: 'Ukraine', region: 'europe', videoId: 'e2gC37ILQmk', aliases: ['odessa', 'odesa', 'اودسا'] },
+  { id: 'paris', city: 'Paris', country: 'France', region: 'europe', videoId: 'OzYp4NRZlwQ', aliases: ['paris', 'پاریس'] },
+  { id: 'london', city: 'London', country: 'UK', region: 'europe', videoId: 'Lxqcg1qt0XU', aliases: ['london', 'لندن'] },
+  { id: 'washington', city: 'Washington DC', country: 'USA', region: 'americas', videoId: '1wV9lLe14aU', aliases: ['washington', 'washington dc', 'واشنگتن'] },
+  { id: 'new-york', city: 'New York', country: 'USA', region: 'americas', videoId: '4qyZLflp-sI', aliases: ['new york', 'nyc', 'نیویورک'] },
+  { id: 'los-angeles', city: 'Los Angeles', country: 'USA', region: 'americas', videoId: 'EO_1LWqsCNE', aliases: ['los angeles', 'la', 'لس آنجلس', 'لس‌آنجلس'] },
+  { id: 'miami', city: 'Miami', country: 'USA', region: 'americas', videoId: '5YCajRjvWCg', aliases: ['miami', 'میامی'] },
+  { id: 'taipei', city: 'Taipei', country: 'Taiwan', region: 'asia', videoId: 'z_fY1pj1VBw', aliases: ['taipei', 'تایپه'] },
+  { id: 'shanghai', city: 'Shanghai', country: 'China', region: 'asia', videoId: '76EwqI5XZIc', aliases: ['shanghai', 'شانگهای'] },
+  { id: 'tokyo', city: 'Tokyo', country: 'Japan', region: 'asia', videoId: '_k-5U7IeK8g', aliases: ['tokyo', 'توکیو'] },
+  { id: 'seoul', city: 'Seoul', country: 'South Korea', region: 'asia', videoId: '-JhoMGoAfFc', aliases: ['seoul', 'سئول'] },
+  { id: 'sydney', city: 'Sydney', country: 'Australia', region: 'asia', videoId: '7pcL-0Wo77U', aliases: ['sydney', 'سیدنی'] },
+  { id: 'iss-earth', city: 'ISS Earth View', country: 'Space', region: 'space', videoId: 'vytmBNhc9ig', aliases: ['iss', 'space', 'فضا', 'ایستگاه فضایی'] },
+  { id: 'nasa-live', city: 'NASA TV', country: 'Space', region: 'space', videoId: 'zPH5KtjJFaQ', aliases: ['nasa', 'ناسا'] },
 ];
 
-const MAX_GRID_CELLS = 4;
-
-// Eco mode pauses streams after inactivity to save CPU/bandwidth.
-const ECO_IDLE_PAUSE_MS = IDLE_PAUSE_MS;
-const IDLE_ACTIVITY_EVENTS = ['mousedown', 'keydown', 'scroll', 'touchstart', 'mousemove'] as const;
-
-type ViewMode = 'grid' | 'single';
-type RegionFilter = 'all' | WebcamRegion;
-
-const ALL_REGIONS: RegionFilter[] = ['all', 'middle-east', 'europe', 'americas', 'asia', 'space'];
-
-interface WebcamPrefs {
-  regionFilter: RegionFilter;
-  viewMode: ViewMode;
-  activeFeedId: string;
+function normalizeCityQuery(value: string): string {
+  return value
+    .replace(/\u064A/g, '\u06CC')
+    .replace(/\u0643/g, '\u06A9')
+    .replace(/\u200C/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function loadWebcamPrefs(forceSingleView: boolean): WebcamPrefs {
-  const stored = loadFromStorage<Partial<WebcamPrefs>>(STORAGE_KEYS.webcamPrefs, {});
-  const region = stored.regionFilter as RegionFilter;
-  const regionFilter = ALL_REGIONS.includes(region) ? region : 'all';
-  const viewMode = forceSingleView ? 'single'
-    : (stored.viewMode === 'grid' || stored.viewMode === 'single' ? stored.viewMode : 'grid');
-  const regionFeeds = regionFilter === 'all' ? WEBCAM_FEEDS
-    : WEBCAM_FEEDS.filter(f => f.region === regionFilter);
-  const matchedFeed = regionFeeds.find(f => f.id === stored.activeFeedId);
-  const activeFeedId = matchedFeed?.id ?? regionFeeds[0]?.id ?? WEBCAM_FEEDS[0]!.id;
-  return { regionFilter, viewMode, activeFeedId };
+function normalizeSearchToken(value: string): string {
+  return normalizeCityQuery(value).toLocaleLowerCase('fa-IR');
 }
 
-function saveWebcamPrefs(prefs: WebcamPrefs): void {
-  saveToStorage(STORAGE_KEYS.webcamPrefs, prefs);
+function containsPersianScript(value: string): boolean {
+  return /[\u0600-\u06FF]/.test(value);
 }
 
-interface WebcamIframeTracker {
-  feed: WebcamFeed;
-  container: HTMLElement;
-  timeout: ReturnType<typeof setTimeout> | null;
-  blocked: boolean;
+function formatDistance(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '';
+  if (value < 1) return `${Math.max(1, Math.round(value * 1000))} متر`;
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} کیلومتر`;
+}
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const r = 6371;
+  const toRad = (value: number) => value * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * r * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function radiusToBounds(latitude: number, longitude: number, radiusKm: number) {
+  const latDelta = radiusKm / 111.32;
+  const cosLat = Math.max(0.15, Math.cos(latitude * Math.PI / 180));
+  const lonDelta = radiusKm / (111.32 * cosLat);
+  return {
+    w: Math.max(-180, longitude - lonDelta),
+    s: Math.max(-90, latitude - latDelta),
+    e: Math.min(180, longitude + lonDelta),
+    n: Math.min(90, latitude + latDelta),
+  };
+}
+
+function youtubeFeedToCamera(feed: YouTubeFeed): CameraResult {
+  return {
+    id: `yt-${feed.id}`,
+    title: feed.city,
+    country: feed.country,
+    category: 'YouTube Live',
+    latitude: null,
+    longitude: null,
+    distanceKm: null,
+    playerUrl: null,
+    thumbnailUrl: null,
+    sourceUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(feed.videoId)}`,
+    sourceName: 'YouTube',
+    youtubeVideoId: feed.videoId,
+    moving: true,
+    lastUpdated: null,
+  };
+}
+
+function safeWindyPlayerUrl(webcamId: string, playerUrl?: string | null): string {
+  const candidate = playerUrl?.trim() ?? '';
+  if (/^https?:\/\//i.test(candidate)) return candidate;
+  return `${WINDY_PLAYER_FALLBACK}/${encodeURIComponent(webcamId)}/day`;
 }
 
 export class LiveWebcamsPanel extends Panel {
-  private viewMode: ViewMode = 'grid';
   private regionFilter: RegionFilter = 'all';
-  private activeFeed: WebcamFeed = WEBCAM_FEEDS[0]!;
-  private toolbar: HTMLElement | null = null;
-  private iframes: HTMLIFrameElement[] = [];
-  private iframeTrackers = new Map<HTMLIFrameElement, WebcamIframeTracker>();
-  // Feeds the user has explicitly started. The grid is a "wall" — multiple tiles play at once;
-  // single view keeps one. Tiles coexist and are only torn down by scroll-away/hidden/idle/close.
-  private activeIframeFeedIds = new Set<string>();
-  private observer: IntersectionObserver | null = null;
-  private isVisible = false;
-  // Stream lifecycle
-  private idleTimeout: ReturnType<typeof setTimeout> | null = null;
-  private boundIdleResetHandler!: () => void;
-  private boundVisibilityHandler!: () => void;
-  private idleDetectionEnabled = false;
-  private isIdle = false;
-  private alwaysOn = getLiveStreamsAlwaysOn();
-  private unsubscribeStreamSettings: (() => void) | null = null;
-  private resumeFeedAfterIdleIds: string[] = [];
-  // Play-all cascade: start the whole webcam wall, but never start a disabled or collapsed panel.
-  private readonly boundPlayAllStarter = () => {
-    if (this.canHostLiveMedia()) this.playAllFeeds();
-  };
+  private viewMode: ViewMode = 'grid';
+  private sourceMode: SourceMode = 'windy';
+  private cameras: CameraResult[] = [];
+  private selectedCameraId: string | null = null;
+  private searchMode = false;
+  private currentLocation: SearchLocation | null = null;
+  private currentContextLabel = 'نمای جهانی';
+  private loading = false;
+  private destroyed = false;
+  private requestSerial = 0;
+  private refreshTimer: number | null = null;
 
-  // UI
-  private fullscreenBtn: HTMLButtonElement | null = null;
+  private searchBar: HTMLElement | null = null;
+  private searchInput: HTMLInputElement | null = null;
+  private searchButton: HTMLButtonElement | null = null;
+  private statusLine: HTMLElement | null = null;
+  private sourceBar: HTMLElement | null = null;
+  private sourceWindyButton: HTMLButtonElement | null = null;
+  private sourceYoutubeButton: HTMLButtonElement | null = null;
+  private controlsBar: HTMLElement | null = null;
+  private fullscreenButton: HTMLButtonElement | null = null;
   private isFullscreen = false;
-  private readonly forceSingleView = !isDesktopRuntime() && isMobileDevice();
-  private readonly EMBED_READY_TIMEOUT_MS = 15000;
-  private boundEmbedMessageHandler: (e: MessageEvent) => void;
 
   constructor() {
-    super({ id: 'live-webcams', title: t('panels.liveWebcams'), className: 'panel-wide', closable: true, collapsible: true, infoTooltip: t('components.liveWebcams.infoTooltip') });
-    this.insertLiveCountBadge(WEBCAM_FEEDS.length);
-
-    const prefs = loadWebcamPrefs(this.forceSingleView);
-    this.regionFilter = prefs.regionFilter;
-    this.viewMode = prefs.viewMode;
-    this.activeFeed = WEBCAM_FEEDS.find(f => f.id === prefs.activeFeedId) ?? WEBCAM_FEEDS[0]!;
-
-    this.createFullscreenButton();
-    this.createToolbar();
-    this.setupIntersectionObserver();
-    this.setupIdleDetection();
-    subscribeStreamQualityChange(() => this.render());
-    this.unsubscribeStreamSettings = subscribeLiveStreamsSettingsChange((alwaysOn) => {
-      this.alwaysOn = alwaysOn;
-      this.applyIdleMode();
-      // Leaving always-on keeps whatever is playing; eco-idle (re-armed by applyIdleMode) pauses it later.
-      if (alwaysOn && this.isVisible && !document.hidden) {
-        this.startAlwaysOnPlayback();
-      }
+    super({
+      id: 'live-webcams',
+      title: t('panels.liveWebcams'),
+      className: 'panel-wide',
+      closable: true,
+      collapsible: true,
+      infoTooltip: t('components.liveWebcams.infoTooltip'),
     });
-    this.boundEmbedMessageHandler = (e) => this.handleEmbedMessage(e);
-    window.addEventListener('message', this.boundEmbedMessageHandler);
-    this.render();
-    registerLiveMediaStarter('live-webcams', this.boundPlayAllStarter);
-    document.addEventListener('keydown', this.boundFullscreenEscHandler);
+
+    this.installStyles();
+    this.createFullscreenButton();
+    this.createSearchBar();
+    this.createSourceSwitch();
+    this.createControlsBar();
+
+    this.renderLoading('در حال دریافت Playerهای متحرک Windy…');
+    void this.loadRegion('all');
+
+    this.refreshTimer = window.setInterval(() => {
+      void this.refreshCurrentData();
+    }, WINDY_PLAYER_REFRESH_MS);
+  }
+
+  private installStyles(): void {
+    const styleId = 'rasadyar-live-webcams-windy-player-v5';
+    if (document.getElementById(styleId)) return;
+
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      .rwv5-searchbar {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) auto auto;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 12px 7px;
+        background: linear-gradient(180deg, #071612 0%, #06110e 100%);
+        border-top: 1px solid rgba(45, 212, 191, .14);
+        border-bottom: 1px solid rgba(45, 212, 191, .18);
+        direction: rtl;
+        position: relative;
+        z-index: 5;
+        min-height: 44px;
+        box-sizing: border-box;
+      }
+      .rwv5-search-input {
+        width: 100%;
+        min-width: 0;
+        height: 36px;
+        box-sizing: border-box;
+        border: 1px solid rgba(45, 212, 191, .32);
+        border-radius: 8px;
+        background: #0a1915;
+        color: #eaf8f3;
+        padding: 0 12px;
+        outline: none;
+        font: inherit;
+        font-size: 12px;
+      }
+      .rwv5-search-input::placeholder { color: #728d85; }
+      .rwv5-search-input:focus {
+        border-color: #2dd4bf;
+        background: #0c201b;
+        box-shadow: 0 0 0 3px rgba(45, 212, 191, .10);
+      }
+      .rwv5-search-btn,
+      .rwv5-clear-btn {
+        height: 36px;
+        border-radius: 8px;
+        padding: 0 14px;
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .rwv5-search-btn {
+        border: 1px solid #168d82;
+        background: #0f766e;
+        color: #f0fdfa;
+        font-weight: 700;
+      }
+      .rwv5-search-btn:disabled { opacity: .55; cursor: wait; }
+      .rwv5-clear-btn {
+        border: 1px solid #30463f;
+        background: #10201c;
+        color: #abc3bb;
+      }
+      .rwv5-status {
+        grid-column: 1 / -1;
+        min-height: 16px;
+        font-size: 10px;
+        line-height: 1.5;
+        color: #78958c;
+        text-align: right;
+      }
+      .rwv5-status[data-kind="loading"] { color: #f6c453; }
+      .rwv5-status[data-kind="success"] { color: #6ee7b7; }
+      .rwv5-status[data-kind="warning"] { color: #f6c453; }
+      .rwv5-status[data-kind="error"] { color: #fda4af; }
+
+      .rwv5-sourcebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 12px;
+        background: #06110e;
+        border-bottom: 1px solid rgba(45, 212, 191, .18);
+        direction: rtl;
+        position: relative;
+        z-index: 5;
+      }
+      .rwv5-source-title {
+        font-size: 11px;
+        font-weight: 800;
+        color: #c8e7de;
+      }
+      .rwv5-source-note {
+        margin-top: 2px;
+        font-size: 9px;
+        color: #6f9187;
+      }
+      .rwv5-source-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px;
+        border: 1px solid rgba(45, 212, 191, .28);
+        border-radius: 9px;
+        background: #071712;
+      }
+      .rwv5-source-btn {
+        min-width: 150px;
+        height: 32px;
+        border-radius: 7px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: #9dbbb2;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .rwv5-source-btn[data-source="windy"].active {
+        background: #0f766e;
+        border-color: #2dd4bf;
+        color: #f0fdfa;
+        box-shadow: 0 0 0 2px rgba(45, 212, 191, .10);
+      }
+      .rwv5-source-btn[data-source="youtube"].active {
+        background: #7f1d1d;
+        border-color: #ef4444;
+        color: #fff1f2;
+        box-shadow: 0 0 0 2px rgba(239, 68, 68, .10);
+      }
+
+      .rwv5-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 7px 10px;
+        background: #07110f;
+        border-bottom: 1px solid #16322b;
+        direction: rtl;
+        position: relative;
+        z-index: 4;
+        min-height: 38px;
+        box-sizing: border-box;
+      }
+      .rwv5-region-group,
+      .rwv5-view-group {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex-wrap: wrap;
+      }
+      .rwv5-region-btn,
+      .rwv5-view-btn {
+        min-height: 28px;
+        border: 1px solid #263d36;
+        background: #0a1512;
+        color: #8fa7a0;
+        padding: 4px 10px;
+        border-radius: 5px;
+        font: inherit;
+        font-size: 10px;
+        cursor: pointer;
+      }
+      .rwv5-region-btn:hover,
+      .rwv5-view-btn:hover { border-color: #2f7668; color: #cce6de; }
+      .rwv5-region-btn.active,
+      .rwv5-view-btn.active {
+        border-color: #16a394;
+        background: #0d5f57;
+        color: #f0fdfa;
+      }
+
+      .rwv5-content {
+        min-height: 340px;
+        background: #050d0b;
+        padding: 0 !important;
+        overflow: auto;
+      }
+      .rwv5-context {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 11px;
+        direction: rtl;
+        background: #081713;
+        border-bottom: 1px solid #17342d;
+      }
+      .rwv5-context-title {
+        color: #dff4ee;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .rwv5-provider {
+        color: #5eead4;
+        font-size: 9px;
+        white-space: nowrap;
+      }
+      .rwv5-provider.youtube { color: #fca5a5; }
+
+      .rwv5-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        background: #16342c;
+      }
+      .rwv5-card {
+        min-width: 0;
+        background: linear-gradient(180deg, #081612 0%, #06100e 100%);
+        position: relative;
+        overflow: hidden;
+      }
+      .rwv5-player-wrap {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        background: #020706;
+        overflow: hidden;
+      }
+      .rwv5-player,
+      .rwv5-youtube-frame {
+        width: 100%;
+        height: 100%;
+        min-height: 190px;
+        border: 0;
+        display: block;
+        background: #020202;
+      }
+      .rwv5-player-badge {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 2;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.10);
+        background: rgba(3, 12, 10, .84);
+        color: #e8f6f1;
+        font-size: 9px;
+        pointer-events: none;
+      }
+      .rwv5-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34d399;
+        box-shadow: 0 0 0 3px rgba(52,211,153,.12);
+      }
+      .rwv5-youtube .rwv5-dot {
+        background: #ef4444;
+        box-shadow: 0 0 0 3px rgba(239,68,68,.12);
+      }
+      .rwv5-card-body {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 9px 10px 10px;
+        direction: rtl;
+        text-align: right;
+      }
+      .rwv5-card-title {
+        color: #edf9f5;
+        font-size: 11px;
+        line-height: 1.45;
+        font-weight: 700;
+      }
+      .rwv5-card-meta {
+        color: #839f96;
+        font-size: 9px;
+        line-height: 1.5;
+      }
+      .rwv5-card-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .rwv5-source {
+        color: #5eead4;
+        font-size: 9px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .rwv5-open {
+        flex: 0 0 auto;
+        border: 1px solid #31564c;
+        border-radius: 6px;
+        background: #0d2922;
+        color: #d2f7ec;
+        padding: 5px 8px;
+        font: inherit;
+        font-size: 9px;
+        cursor: pointer;
+      }
+      .rwv5-open.youtube {
+        border-color: #7f1d1d;
+        background: #3f1111;
+        color: #fee2e2;
+      }
+      .rwv5-single {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .rwv5-single .rwv5-player-wrap { aspect-ratio: 16 / 8.4; }
+      .rwv5-switcher {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        padding: 8px 10px;
+        background: #07120f;
+        border-top: 1px solid #17342d;
+        direction: rtl;
+      }
+      .rwv5-switch-btn {
+        border: 1px solid #28463e;
+        border-radius: 5px;
+        background: #0b1b17;
+        color: #91aaa2;
+        padding: 5px 8px;
+        font: inherit;
+        font-size: 9px;
+        cursor: pointer;
+      }
+      .rwv5-switch-btn.active {
+        border-color: #20b8a7;
+        color: #e7faf5;
+        background: #0b5d54;
+      }
+      .rwv5-placeholder {
+        min-height: 300px;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        box-sizing: border-box;
+        text-align: center;
+        color: #8aa49c;
+        background: radial-gradient(circle at 50% 30%, rgba(45,212,191,.06), transparent 40%), #050d0b;
+        direction: rtl;
+        font-size: 11px;
+        line-height: 1.8;
+      }
+      .rwv5-fullscreen {
+        position: fixed !important;
+        inset: 10px !important;
+        width: auto !important;
+        height: auto !important;
+        z-index: 10000 !important;
+        background: #04100d !important;
+        box-shadow: 0 20px 70px rgba(0,0,0,.65) !important;
+      }
+      body.rwv5-fullscreen-active { overflow: hidden !important; }
+
+      @media (max-width: 760px) {
+        .rwv5-searchbar { grid-template-columns: minmax(0, 1fr) auto; }
+        .rwv5-clear-btn { grid-column: 1 / -1; }
+        .rwv5-sourcebar { align-items: flex-start; flex-direction: column; }
+        .rwv5-source-actions { width: 100%; box-sizing: border-box; }
+        .rwv5-source-btn { min-width: 0; flex: 1 1 0; }
+        .rwv5-grid { grid-template-columns: 1fr; }
+        .rwv5-provider { white-space: normal; text-align: left; }
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   private createFullscreenButton(): void {
-    this.fullscreenBtn = document.createElement('button');
-    this.fullscreenBtn.className = 'live-mute-btn';
-    this.fullscreenBtn.title = 'Fullscreen';
-    setTrustedHtml(this.fullscreenBtn, trustedHtml('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>', "legacy direct innerHTML migration"));
-    this.fullscreenBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      track('webcam-fullscreen', { entering: !this.isFullscreen });
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'live-mute-btn';
+    button.title = 'تمام‌صفحه';
+    button.setAttribute('aria-label', 'تمام‌صفحه');
+    button.textContent = '⛶';
+    button.addEventListener('click', event => {
+      event.stopPropagation();
       this.toggleFullscreen();
     });
-    const header = this.element.querySelector('.panel-header');
-    header?.appendChild(this.fullscreenBtn);
+    this.fullscreenButton = button;
+    this.element.querySelector('.panel-header')?.appendChild(button);
   }
 
   private toggleFullscreen(): void {
     this.isFullscreen = !this.isFullscreen;
-    this.element.classList.toggle('live-news-fullscreen', this.isFullscreen);
-    document.body.classList.toggle('live-news-fullscreen-active', this.isFullscreen);
-    if (this.fullscreenBtn) {
-      this.fullscreenBtn.title = this.isFullscreen ? 'Exit fullscreen' : 'Fullscreen';
-      setTrustedHtml(this.fullscreenBtn, trustedHtml(this.isFullscreen
-        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>'
-        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>', "legacy direct innerHTML migration"));
+    this.element.classList.toggle('rwv5-fullscreen', this.isFullscreen);
+    document.body.classList.toggle('rwv5-fullscreen-active', this.isFullscreen);
+    if (this.fullscreenButton) {
+      this.fullscreenButton.title = this.isFullscreen ? 'خروج از تمام‌صفحه' : 'تمام‌صفحه';
     }
   }
 
-  private boundFullscreenEscHandler = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && this.isFullscreen) this.toggleFullscreen();
-  };
+  private createSearchBar(): void {
+    const root = document.createElement('div');
+    root.className = 'rwv5-searchbar';
 
-  private savePrefs(): void {
-    saveWebcamPrefs({
-      regionFilter: this.regionFilter,
-      viewMode: this.viewMode,
-      activeFeedId: this.activeFeed.id,
+    const input = document.createElement('input');
+    input.type = 'search';
+    input.className = 'rwv5-search-input';
+    input.dir = 'auto';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.placeholder = 'نام شهر را فارسی یا انگلیسی وارد کنید؛ مثال: تهران / Tehran / Tabriz';
+    input.setAttribute('aria-label', 'جستجوی شهر برای وب‌کم');
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void this.searchCity();
+      } else if (event.key === 'Escape') {
+        this.clearSearch();
+      }
     });
+
+    const searchButton = document.createElement('button');
+    searchButton.type = 'button';
+    searchButton.className = 'rwv5-search-btn';
+    searchButton.textContent = 'جستجوی وب‌کم';
+    searchButton.addEventListener('click', () => void this.searchCity());
+
+    const clearButton = document.createElement('button');
+    clearButton.type = 'button';
+    clearButton.className = 'rwv5-clear-btn';
+    clearButton.textContent = 'بازگشت';
+    clearButton.addEventListener('click', () => this.clearSearch());
+
+    const status = document.createElement('div');
+    status.className = 'rwv5-status';
+    status.dataset.kind = 'idle';
+    status.textContent = 'حالت عمومی فعال است • Player متحرک Windy • جستجو به فارسی و انگلیسی';
+
+    root.append(input, searchButton, clearButton, status);
+    this.searchInput = input;
+    this.searchButton = searchButton;
+    this.statusLine = status;
+    this.searchBar = root;
+
+    this.element.insertBefore(root, this.content);
   }
 
-  private get filteredFeeds(): WebcamFeed[] {
-    if (this.regionFilter === 'all') return WEBCAM_FEEDS;
-    return WEBCAM_FEEDS.filter(f => f.region === this.regionFilter);
+  private createSourceSwitch(): void {
+    const bar = document.createElement('div');
+    bar.className = 'rwv5-sourcebar';
+
+    const info = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'rwv5-source-title';
+    title.textContent = 'منبع پخش وب‌کم';
+    const note = document.createElement('div');
+    note.className = 'rwv5-source-note';
+    note.textContent = 'Windy برای پخش متحرک عمومی؛ YouTube فقط در صورت انتخاب شما.';
+    info.append(title, note);
+
+    const actions = document.createElement('div');
+    actions.className = 'rwv5-source-actions';
+
+    const windyButton = document.createElement('button');
+    windyButton.type = 'button';
+    windyButton.className = 'rwv5-source-btn';
+    windyButton.dataset.source = 'windy';
+    windyButton.textContent = 'عمومی (Windy متحرک)';
+    windyButton.addEventListener('click', () => void this.setSourceMode('windy'));
+
+    const youtubeButton = document.createElement('button');
+    youtubeButton.type = 'button';
+    youtubeButton.className = 'rwv5-source-btn';
+    youtubeButton.dataset.source = 'youtube';
+    youtubeButton.textContent = 'YouTube';
+    youtubeButton.addEventListener('click', () => void this.setSourceMode('youtube'));
+
+    actions.append(windyButton, youtubeButton);
+    bar.append(info, actions);
+
+    this.sourceWindyButton = windyButton;
+    this.sourceYoutubeButton = youtubeButton;
+    this.updateSourceSwitch();
+    this.sourceBar = bar;
+
+    this.element.insertBefore(bar, this.content);
   }
 
-  private static readonly ALL_GRID_IDS = ['jerusalem', 'middle-east', 'kyiv', 'washington'];
-
-  private get gridFeeds(): WebcamFeed[] {
-    if (this.regionFilter === 'all') {
-      return LiveWebcamsPanel.ALL_GRID_IDS
-        .map(id => WEBCAM_FEEDS.find(f => f.id === id)!)
-        .filter(Boolean);
-    }
-    return this.filteredFeeds.slice(0, MAX_GRID_CELLS);
+  private updateSourceSwitch(): void {
+    this.sourceWindyButton?.classList.toggle('active', this.sourceMode === 'windy');
+    this.sourceYoutubeButton?.classList.toggle('active', this.sourceMode === 'youtube');
   }
 
-  private createToolbar(): void {
-    this.toolbar = document.createElement('div');
-    this.toolbar.className = 'webcam-toolbar';
+  private createControlsBar(): void {
+    const root = document.createElement('div');
+    root.className = 'rwv5-controls';
 
     const regionGroup = document.createElement('div');
-    regionGroup.className = 'webcam-toolbar-group';
+    regionGroup.className = 'rwv5-region-group';
 
-    const regions: { key: RegionFilter; label: string }[] = [
-      { key: 'all', label: t('components.webcams.regions.all') },
-      { key: 'middle-east', label: t('components.webcams.regions.mideast') },
-      { key: 'europe', label: t('components.webcams.regions.europe') },
-      { key: 'americas', label: t('components.webcams.regions.americas') },
-      { key: 'asia', label: t('components.webcams.regions.asia') },
-      { key: 'space', label: t('components.webcams.regions.space') },
-    ];
-
-    regions.forEach(({ key, label }) => {
-      const btn = document.createElement('button');
-      btn.className = `webcam-region-btn${key === this.regionFilter ? ' active' : ''}`;
-      btn.dataset.region = key;
-      btn.textContent = label;
-      btn.addEventListener('click', () => this.setRegionFilter(key));
-      regionGroup.appendChild(btn);
-    });
+    for (const region of REGION_ORDER) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `rwv5-region-btn${region === this.regionFilter ? ' active' : ''}`;
+      button.dataset.region = region;
+      button.textContent = REGION_PRESETS[region].label;
+      button.addEventListener('click', () => void this.loadRegion(region));
+      regionGroup.appendChild(button);
+    }
 
     const viewGroup = document.createElement('div');
-    viewGroup.className = 'webcam-toolbar-group';
+    viewGroup.className = 'rwv5-view-group';
 
-    const gridBtn = document.createElement('button');
-    gridBtn.className = `webcam-view-btn${this.viewMode === 'grid' ? ' active' : ''}`;
-    gridBtn.dataset.mode = 'grid';
-    setTrustedHtml(gridBtn, trustedHtml('<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>', "legacy direct innerHTML migration"));
-    gridBtn.title = 'Grid view';
-    gridBtn.addEventListener('click', () => this.setViewMode('grid'));
+    const gridButton = document.createElement('button');
+    gridButton.type = 'button';
+    gridButton.className = 'rwv5-view-btn active';
+    gridButton.dataset.mode = 'grid';
+    gridButton.textContent = '▦';
+    gridButton.title = 'نمای شبکه‌ای';
+    gridButton.addEventListener('click', () => this.setViewMode('grid'));
 
-    const singleBtn = document.createElement('button');
-    singleBtn.className = `webcam-view-btn${this.viewMode === 'single' ? ' active' : ''}`;
-    singleBtn.dataset.mode = 'single';
-    setTrustedHtml(singleBtn, trustedHtml('<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="3" y="3" width="18" height="14" rx="2"/><rect x="3" y="19" width="18" height="2" rx="1"/></svg>', "legacy direct innerHTML migration"));
-    singleBtn.title = 'Single view';
-    singleBtn.addEventListener('click', () => this.setViewMode('single'));
+    const singleButton = document.createElement('button');
+    singleButton.type = 'button';
+    singleButton.className = 'rwv5-view-btn';
+    singleButton.dataset.mode = 'single';
+    singleButton.textContent = '▣';
+    singleButton.title = 'نمای تکی';
+    singleButton.addEventListener('click', () => this.setViewMode('single'));
 
-    // On mobile we force single view and hide/disable the grid toggle.
-    if (this.forceSingleView) {
-      gridBtn.disabled = true;
-      gridBtn.style.display = 'none';
-    }
+    viewGroup.append(gridButton, singleButton);
+    root.append(regionGroup, viewGroup);
+    this.controlsBar = root;
 
-    viewGroup.appendChild(gridBtn);
-    viewGroup.appendChild(singleBtn);
-
-    this.toolbar.appendChild(regionGroup);
-    this.toolbar.appendChild(viewGroup);
-    this.element.insertBefore(this.toolbar, this.content);
+    this.element.insertBefore(root, this.content);
   }
 
-  private setRegionFilter(filter: RegionFilter): void {
-    if (filter === this.regionFilter) return;
-    trackWebcamRegionFiltered(filter);
-    this.regionFilter = filter;
-    this.toolbar?.querySelectorAll('.webcam-region-btn').forEach(btn => {
-      (btn as HTMLElement).classList.toggle('active', (btn as HTMLElement).dataset.region === filter);
-    });
-    // Region change swaps the entire feed set — stop the current wall and start fresh from previews.
-    this.clearActivePlayback();
-    const feeds = this.filteredFeeds;
-    if (feeds.length > 0 && !feeds.includes(this.activeFeed)) {
-      this.activeFeed = feeds[0]!;
+  private setStatus(message: string, kind: StatusKind = 'idle'): void {
+    if (!this.statusLine) return;
+    this.statusLine.textContent = message;
+    this.statusLine.dataset.kind = kind;
+  }
+
+  private setBusy(busy: boolean): void {
+    this.loading = busy;
+    if (this.searchButton) {
+      this.searchButton.disabled = busy;
+      this.searchButton.textContent = busy ? 'در حال جستجو…' : 'جستجوی وب‌کم';
     }
-    this.savePrefs();
-    this.render();
+    if (this.searchInput) this.searchInput.disabled = busy;
+  }
+
+  private updateRegionButtons(): void {
+    this.controlsBar?.querySelectorAll<HTMLButtonElement>('.rwv5-region-btn').forEach(button => {
+      button.classList.toggle('active', button.dataset.region === this.regionFilter && !this.searchMode);
+    });
   }
 
   private setViewMode(mode: ViewMode): void {
-    if (this.forceSingleView && mode === 'grid') return;
-    if (mode === this.viewMode) return;
+    if (this.viewMode === mode) return;
     this.viewMode = mode;
-    // Switching layout resets the wall to the selected feed; the user rebuilds it by clicking tiles.
-    const keepActive = this.activeIframeFeedIds.has(this.activeFeed.id);
-    this.activeIframeFeedIds.clear();
-    if (keepActive) this.activeIframeFeedIds.add(this.activeFeed.id);
-    this.savePrefs();
-    this.toolbar?.querySelectorAll('.webcam-view-btn').forEach(btn => {
-      (btn as HTMLElement).classList.toggle('active', (btn as HTMLElement).dataset.mode === mode);
+    this.controlsBar?.querySelectorAll<HTMLButtonElement>('.rwv5-view-btn').forEach(button => {
+      button.classList.toggle('active', button.dataset.mode === mode);
     });
-    // In always-on, let startAlwaysOnPlayback own the render so the wall isn't built then immediately rebuilt.
-    if (!this.startAlwaysOnPlayback()) {
-      this.render();
-    }
-  }
-
-  private buildEmbedUrl(videoId: string): string {
-    const quality = getStreamQuality();
-    if (isDesktopRuntime()) {
-      // Use local sidecar embed — YouTube rejects tauri:// parent origin with error 153.
-      // The sidecar serves the embed from http://127.0.0.1:PORT which YouTube accepts.
-      const params = new URLSearchParams({ videoId, autoplay: '1', mute: '1' });
-      if (quality !== 'auto') params.set('vq', quality);
-      return `http://localhost:${getLocalApiPort()}/api/youtube-embed?${params.toString()}`;
-    }
-    const vq = quality !== 'auto' ? `&vq=${quality}` : '';
-    return `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&controls=0&modestbranding=1&playsinline=1&rel=0&enablejsapi=1&origin=${window.location.origin}${vq}`;
-  }
-
-  private createIframe(feed: WebcamFeed): HTMLIFrameElement {
-    const iframe = document.createElement('iframe');
-    iframe.className = 'webcam-iframe';
-    iframe.src = this.buildEmbedUrl(feed.fallbackVideoId);
-    iframe.title = `${feed.city} live webcam`;
-    iframe.allow = 'autoplay; encrypted-media; picture-in-picture; storage-access';
-    iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-    if (!isDesktopRuntime()) {
-      iframe.allowFullscreen = true;
-      iframe.setAttribute('loading', 'lazy');
-    }
-    return iframe;
-  }
-
-  private findIframeBySource(source: MessageEventSource | null): HTMLIFrameElement | null {
-    if (!source || !(source instanceof Window)) return null;
-    for (const iframe of this.iframes) {
-      if (iframe.contentWindow === source) return iframe;
-    }
-    return null;
-  }
-
-  private clearIframeTimeout(iframe: HTMLIFrameElement): void {
-    const tracker = this.iframeTrackers.get(iframe);
-    if (!tracker?.timeout) return;
-    clearTimeout(tracker.timeout);
-    tracker.timeout = null;
-  }
-
-  private markIframeBlocked(iframe: HTMLIFrameElement): void {
-    const tracker = this.iframeTrackers.get(iframe);
-    if (!tracker || tracker.blocked) return;
-    tracker.blocked = true;
-    this.clearIframeTimeout(iframe);
-    this.renderBlockedOverlay(iframe, tracker.feed, tracker.container);
-  }
-
-  private markIframeReady(iframe: HTMLIFrameElement): void {
-    const tracker = this.iframeTrackers.get(iframe);
-    if (!tracker) return;
-    tracker.blocked = false;
-    this.clearIframeTimeout(iframe);
-    tracker.container.querySelector('.webcam-embed-fallback')?.remove();
-  }
-
-  private trackIframe(iframe: HTMLIFrameElement, feed: WebcamFeed, container: HTMLElement): void {
-    const tracker: WebcamIframeTracker = {
-      feed,
-      container,
-      timeout: null,
-      blocked: false,
-    };
-    this.iframeTrackers.set(iframe, tracker);
-
-    // YouTube embeds post yt-ready/yt-state (desktop sidecar) or native YT API events (web with enablejsapi=1).
-    // If nothing arrives within the timeout, assume blocked/stuck.
-    // Fallback: iframe load event cancels the timeout — Firefox privacy restrictions
-    // can block YouTube JS API postMessage while the video plays fine.
-    iframe.addEventListener('load', () => this.markIframeReady(iframe), { once: true });
-    tracker.timeout = setTimeout(() => this.markIframeBlocked(iframe), this.EMBED_READY_TIMEOUT_MS);
-  }
-
-  private playFeed(feed: WebcamFeed, source: 'grid' | 'single' | 'settings'): void {
-    if (source !== 'settings') {
-      trackWebcamSelected(feed.id, feed.city, source);
-    }
-    this.activeFeed = feed;
-    this.isIdle = false;
-    const alreadyActive = this.activeIframeFeedIds.has(feed.id);
-    this.activeIframeFeedIds.add(feed.id);
-    this.savePrefs();
-    if (!this.isVisible || document.hidden) return;
-    // Grid is a wall: swap just the clicked tile into a live iframe so sibling streams keep playing.
-    if (this.viewMode === 'grid' && !this.forceSingleView && !alreadyActive && this.activateGridCell(feed)) {
-      return;
-    }
     this.render();
   }
 
-  /** Swap a single grid preview tile into a live iframe in place, leaving sibling streams untouched. */
-  private activateGridCell(feed: WebcamFeed): boolean {
-    const grid = this.content.querySelector('.webcam-grid');
-    if (!grid) return false;
-    const preview = grid.querySelector<HTMLElement>(`.webcam-preview-tile[data-feed-id="${CSS.escape(feed.id)}"]`);
-    const cell = preview?.closest('.webcam-cell') as HTMLElement | null;
-    if (!cell) return false;
-    setTrustedHtml(cell, trustedHtml('', "legacy direct innerHTML migration"));
-    const iframe = this.createIframe(feed);
-    cell.appendChild(iframe);
-    this.iframes.push(iframe);
-    this.trackIframe(iframe, feed, cell);
-    const label = document.createElement('div');
-    label.className = 'webcam-cell-label';
-    setTrustedHtml(label, trustedHtml(`<span class="webcam-live-dot"></span><span class="webcam-city">${escapeHtml(feed.city.toUpperCase())}</span>`, "legacy direct innerHTML migration"));
-    cell.appendChild(label);
-    return true;
-  }
+  private async setSourceMode(mode: SourceMode): Promise<void> {
+    if (this.sourceMode === mode) return;
+    this.requestSerial++;
+    this.sourceMode = mode;
+    this.updateSourceSwitch();
 
-  private isPanelVisible(): boolean {
-    if (!this.element.isConnected) return false;
-    const rect = this.element.getBoundingClientRect();
-    return rect.width > 0 &&
-      rect.height > 0 &&
-      rect.bottom > 0 &&
-      rect.right > 0 &&
-      rect.top < window.innerHeight &&
-      rect.left < window.innerWidth;
-  }
-
-  /** Ensure the always-on feed(s) are in the active set. Returns true if it rendered (so callers don't double-render). */
-  private startAlwaysOnPlayback(): boolean {
-    if (!this.alwaysOn || document.hidden || !this.element.isConnected || !this.isVisible) return false;
-    // In grid view auto-start the whole wall; single view auto-starts only the selected feed.
-    const feeds = (this.viewMode === 'grid' && !this.forceSingleView) ? this.gridFeeds : [this.activeFeed];
-    let added = false;
-    for (const feed of feeds) {
-      if (!this.activeIframeFeedIds.has(feed.id)) {
-        this.activeIframeFeedIds.add(feed.id);
-        added = true;
-      }
-    }
-    if (!added) return false;
-    this.isIdle = false;
-    this.render();
-    return true;
-  }
-
-  /**
-   * Start the whole webcam wall (every grid tile, or the single feed in single view) regardless of
-   * always-on. Drives the "play all" cascade. Off-screen feeds are queued and render on visibility.
-   *
-   * This intentionally uses a full render() rather than the per-tile activateGridCell() swap that
-   * playFeed() uses: the cascade is an all-at-once start. The only grid trigger is a preview-tile
-   * click, which only exists when the grid is fully stopped (no tiles playing), so the full render
-   * rebuilds from zero — no already-playing iframe is destroyed/reloaded. A future caller that adds
-   * feeds incrementally before calling this should switch to the surgical swap to avoid reload flashes.
-   */
-  private playAllFeeds(): void {
-    const feeds = (this.viewMode === 'grid' && !this.forceSingleView) ? this.gridFeeds : [this.activeFeed];
-    let added = false;
-    for (const feed of feeds) {
-      if (!this.activeIframeFeedIds.has(feed.id)) {
-        this.activeIframeFeedIds.add(feed.id);
-        added = true;
-      }
-    }
-    if (!added) return;
-    this.isIdle = false;
-    if (this.isVisible && !document.hidden) this.render();
-  }
-
-  /** Stop and forget every active tile without rebuilding the shell. */
-  private clearActivePlayback(): void {
-    this.activeIframeFeedIds.clear();
-    this.destroyIframes();
-  }
-
-  private teardownPlayback(reason: LiveMediaStopReason): void {
-    this.resumeFeedAfterIdleIds = reason === 'idle' ? Array.from(this.activeIframeFeedIds) : [];
-    this.clearActivePlayback();
-    // Don't rebuild DOM for a backgrounded tab; the visibility handler re-renders on return.
-    if (this.isVisible && !this.isIdle && this.element.isConnected && !document.hidden) {
-      this.render();
-    }
-  }
-
-  private renderPreviewTile(container: HTMLElement, feed: WebcamFeed, source: 'grid' | 'single'): void {
-    const preview = document.createElement('div');
-    preview.className = 'webcam-preview-tile';
-    preview.dataset.feedId = feed.id;
-
-    const status = document.createElement('div');
-    status.className = 'webcam-preview-status';
-    const dot = document.createElement('span');
-    dot.className = 'webcam-live-dot';
-    const statusText = document.createElement('span');
-    statusText.textContent = t('components.webcams.previewStatus') || 'پیش‌نمایش زنده';
-    status.append(dot, statusText);
-
-    const title = document.createElement('div');
-    title.className = 'webcam-preview-title';
-    title.textContent = feed.city;
-
-    const meta = document.createElement('div');
-    meta.className = 'webcam-preview-meta';
-    meta.textContent = `${feed.country} · ${feed.region.replace('-', ' ')}`;
-
-    const playBtn = document.createElement('button');
-    playBtn.type = 'button';
-    playBtn.className = 'offline-retry webcam-preview-play';
-    playBtn.textContent = t('components.webcams.play') || 'پخش';
-    // First play intent lights up everything (the wall + Live News), not just this tile.
-    const playAll = () => {
-      trackWebcamSelected(feed.id, feed.city, source);
-      this.activeFeed = feed;
-      this.savePrefs();
-      playAllLiveMedia();
-    };
-    playBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      playAll();
-    });
-
-    preview.addEventListener('click', () => playAll());
-    preview.append(status, title, meta, playBtn);
-    container.appendChild(preview);
-  }
-
-  private retryIframe(oldIframe: HTMLIFrameElement): void {
-    const tracker = this.iframeTrackers.get(oldIframe);
-    if (!tracker) return;
-
-    if (!oldIframe.parentNode) {
-      this.clearIframeTimeout(oldIframe);
+    const query = normalizeCityQuery(this.searchInput?.value ?? '');
+    if (query.length >= 2) {
+      await this.searchCity();
       return;
     }
-    const freshIframe = this.createIframe(tracker.feed);
+
+    this.setStatus(
+      mode === 'youtube'
+        ? 'حالت YouTube فعال است • ممکن است در برخی شبکه‌ها نیازمند دسترسی جداگانه باشد.'
+        : 'حالت عمومی فعال است • Player متحرک Windy • بدون YouTube',
+      mode === 'youtube' ? 'warning' : 'success',
+    );
+
+    await this.loadRegion(this.regionFilter);
+  }
+
+  private async requestJson(url: string): Promise<unknown> {
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json() as Promise<unknown>;
+  }
+
+  private async geocodeCity(query: string): Promise<SearchLocation | null> {
+    const params = new URLSearchParams({
+      name: query,
+      count: '5',
+      language: containsPersianScript(query) ? 'fa' : 'en',
+      format: 'json',
+    });
+
+    const payload = await this.requestJson(`${OPEN_METEO_GEOCODING_URL}?${params.toString()}`) as {
+      results?: Array<{
+        name?: string;
+        country?: string;
+        latitude?: number;
+        longitude?: number;
+        population?: number;
+      }>;
+    };
+
+    const candidates = (payload.results ?? [])
+      .filter(item =>
+        typeof item.name === 'string' &&
+        typeof item.latitude === 'number' &&
+        typeof item.longitude === 'number'
+      )
+      .sort((a, b) => (b.population ?? 0) - (a.population ?? 0));
+
+    const best = candidates[0];
+    if (!best || typeof best.latitude !== 'number' || typeof best.longitude !== 'number') return null;
+
+    return {
+      name: best.name ?? query,
+      country: best.country ?? '',
+      latitude: best.latitude,
+      longitude: best.longitude,
+    };
+  }
+
+  private async fetchWindyEntriesNear(
+    latitude: number,
+    longitude: number,
+    radiusKm: number,
+    limit: number,
+  ): Promise<Array<{ entry: WebcamEntry; distanceKm: number }>> {
+    const bounds = radiusToBounds(latitude, longitude, radiusKm);
+    const response = await fetchWebcams(10, bounds);
+
+    const candidates = response.webcams
+      .filter(cam =>
+        typeof cam.webcamId === 'string' &&
+        cam.webcamId.length > 0 &&
+        typeof cam.lat === 'number' &&
+        typeof cam.lng === 'number'
+      )
+      .map(entry => ({
+        entry,
+        distanceKm: haversineKm(latitude, longitude, entry.lat, entry.lng),
+      }))
+      .filter(item => item.distanceKm <= radiusKm)
+      .sort((a, b) => a.distanceKm - b.distanceKm);
+
+    const seen = new Set<string>();
+    const unique: Array<{ entry: WebcamEntry; distanceKm: number }> = [];
+    for (const item of candidates) {
+      if (seen.has(item.entry.webcamId)) continue;
+      seen.add(item.entry.webcamId);
+      unique.push(item);
+      if (unique.length >= limit) break;
+    }
+
+    return unique;
+  }
+
+  private async hydrateWindyCamera(
+    entry: WebcamEntry,
+    distanceKm: number | null,
+  ): Promise<CameraResult> {
+    let details: GetWebcamImageResponse | null = null;
     try {
-      oldIframe.replaceWith(freshIframe);
-    } catch {
-      // DOM was restructured between parentNode check and replaceWith (race with scroll/channel switch).
-      // Fall back to appending the fresh iframe to the container.
-      this.clearIframeTimeout(oldIframe);
-      this.iframeTrackers.delete(oldIframe);
-      oldIframe.src = 'about:blank';
-      tracker.container.querySelector('.webcam-embed-fallback')?.remove();
-      tracker.container.appendChild(freshIframe);
-      const idx = this.iframes.indexOf(oldIframe);
-      if (idx >= 0) this.iframes[idx] = freshIframe;
-      else this.iframes.push(freshIframe);
-      this.trackIframe(freshIframe, tracker.feed, tracker.container);
-      return;
+      details = await fetchWebcamImage(entry.webcamId);
+    } catch (error) {
+      console.warn('[live-webcams] Windy player lookup failed:', entry.webcamId, error);
     }
-    oldIframe.src = 'about:blank';
 
-    const idx = this.iframes.indexOf(oldIframe);
-    if (idx >= 0) this.iframes[idx] = freshIframe;
+    const playerUrl = safeWindyPlayerUrl(entry.webcamId, details?.playerUrl);
+    const sourceUrl =
+      details?.windyUrl?.trim() ||
+      `https://www.windy.com/webcams/${encodeURIComponent(entry.webcamId)}`;
 
-    this.clearIframeTimeout(oldIframe);
-    this.iframeTrackers.delete(oldIframe);
-    this.trackIframe(freshIframe, tracker.feed, tracker.container);
-    tracker.container.querySelector('.webcam-embed-fallback')?.remove();
+    return {
+      id: `windy-${entry.webcamId}`,
+      title: entry.title || details?.title || 'Windy Webcam',
+      country: entry.country || '',
+      category: entry.category || 'webcam',
+      latitude: typeof entry.lat === 'number' ? entry.lat : null,
+      longitude: typeof entry.lng === 'number' ? entry.lng : null,
+      distanceKm,
+      playerUrl,
+      thumbnailUrl: details?.thumbnailUrl?.trim() || null,
+      sourceUrl,
+      sourceName: 'Windy',
+      youtubeVideoId: null,
+      moving: true,
+      lastUpdated: details?.lastUpdated?.trim() || null,
+    };
   }
 
-  private renderBlockedOverlay(iframe: HTMLIFrameElement, feed: WebcamFeed, container: HTMLElement): void {
-    container.querySelector('.webcam-embed-fallback')?.remove();
-
-    const overlay = document.createElement('div');
-    overlay.className = 'webcam-embed-fallback';
-    overlay.addEventListener('click', (e) => e.stopPropagation());
-
-    const message = document.createElement('div');
-    message.className = 'webcam-embed-fallback-text';
-    message.textContent = 'این پخش مسدود شده یا بارگذاری آن ناموفق بوده است.';
-
-    const actions = document.createElement('div');
-    actions.className = 'webcam-embed-fallback-actions';
-
-    const retryBtn = document.createElement('button');
-    retryBtn.className = 'offline-retry webcam-embed-retry';
-    retryBtn.textContent = t('common.retry') || 'تلاش دوباره';
-    retryBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.retryIframe(iframe);
-    });
-
-    const openBtn = document.createElement('a');
-    openBtn.className = 'offline-retry webcam-embed-open';
-    openBtn.href = `https://www.youtube.com/watch?v=${encodeURIComponent(feed.fallbackVideoId)}`;
-    openBtn.target = '_blank';
-    openBtn.rel = 'noopener noreferrer';
-    openBtn.textContent = t('components.liveNews.openOnYouTube') || 'باز کردن در یوتیوب';
-    openBtn.addEventListener('click', (e) => e.stopPropagation());
-
-    actions.append(retryBtn, openBtn);
-    overlay.append(message, actions);
-    container.appendChild(overlay);
+  private async hydrateWindyBatch(
+    items: Array<{ entry: WebcamEntry; distanceKm: number | null }>,
+  ): Promise<CameraResult[]> {
+    const hydrated = await Promise.all(
+      items.map(item => this.hydrateWindyCamera(item.entry, item.distanceKm))
+    );
+    return hydrated;
   }
 
-  private handleEmbedMessage(e: MessageEvent): void {
-    const iframe = this.findIframeBySource(e.source);
-    if (!iframe) return;
-    if (!isAllowedWebcamEmbedMessageOrigin(e.origin, iframe.src)) return;
+  private async fetchWindyRegion(region: RegionFilter): Promise<CameraResult[]> {
+    if (region === 'space') return [];
 
-    // Desktop sidecar posts { type: 'yt-ready' | 'yt-state' | 'yt-error' }
-    const msg = e.data as { type?: string; state?: number; code?: number; event?: string; info?: unknown } | string | null;
+    const anchors = REGION_PRESETS[region].anchors ?? REGION_PRESETS.all.anchors ?? [];
+    const perAnchor = await Promise.all(
+      anchors.map(async anchor => {
+        const nearby = await this.fetchWindyEntriesNear(
+          anchor.latitude,
+          anchor.longitude,
+          SEARCH_FALLBACK_RADIUS_KM,
+          4,
+        );
+        return nearby[0] ?? null;
+      })
+    );
 
-    // YouTube native API (web) posts JSON strings: '{"event":"onReady",...}'
-    if (typeof msg === 'string') {
-      if (msg[0] !== '{') return;
-      try {
-        const parsed = JSON.parse(msg) as { event?: string; info?: { playerState?: number } };
-        if (parsed.event === 'onReady' || parsed.event === 'initialDelivery') {
-          this.markIframeReady(iframe);
-        } else if (parsed.event === 'infoDelivery' && parsed.info?.playerState === 1) {
-          this.markIframeReady(iframe);
-        }
-      } catch { /* not YouTube JSON — ignore */ }
+    const seen = new Set<string>();
+    const chosen: Array<{ entry: WebcamEntry; distanceKm: number | null }> = [];
+    for (const item of perAnchor) {
+      if (!item || seen.has(item.entry.webcamId)) continue;
+      seen.add(item.entry.webcamId);
+      chosen.push(item);
+      if (chosen.length >= GRID_LIMIT) break;
+    }
+
+    // If some anchors have no webcam, broaden around the first anchor and fill the wall.
+    if (chosen.length < GRID_LIMIT && anchors[0]) {
+      const more = await this.fetchWindyEntriesNear(
+        anchors[0].latitude,
+        anchors[0].longitude,
+        SEARCH_FALLBACK_RADIUS_KM,
+        GRID_LIMIT * 3,
+      );
+      for (const item of more) {
+        if (seen.has(item.entry.webcamId)) continue;
+        seen.add(item.entry.webcamId);
+        chosen.push(item);
+        if (chosen.length >= GRID_LIMIT) break;
+      }
+    }
+
+    return this.hydrateWindyBatch(chosen);
+  }
+
+  private getYoutubeRegionCameras(region: RegionFilter): CameraResult[] {
+    const feeds = region === 'all'
+      ? YOUTUBE_FEEDS
+      : YOUTUBE_FEEDS.filter(feed => feed.region === region);
+
+    return feeds
+      .slice(0, region === 'all' ? GRID_LIMIT : Math.max(GRID_LIMIT, 8))
+      .map(youtubeFeedToCamera);
+  }
+
+  private searchYoutube(query: string): CameraResult[] {
+    const token = normalizeSearchToken(query);
+    const matches = YOUTUBE_FEEDS
+      .filter(feed => {
+        const haystack = [feed.city, feed.country, ...feed.aliases].map(normalizeSearchToken);
+        return haystack.some(value => value.includes(token) || token.includes(value));
+      })
+      .map(youtubeFeedToCamera);
+
+    if (matches.length > 0) return matches.slice(0, SEARCH_RESULT_LIMIT);
+
+    return [{
+      id: `yt-search-${token}`,
+      title: `جستجوی «${query}» در YouTube`,
+      country: '',
+      category: 'YouTube Search',
+      latitude: null,
+      longitude: null,
+      distanceKm: null,
+      playerUrl: null,
+      thumbnailUrl: null,
+      sourceUrl: `https://www.youtube.com/results?search_query=${encodeURIComponent(`${query} live webcam`)}`,
+      sourceName: 'YouTube',
+      youtubeVideoId: null,
+      moving: false,
+      lastUpdated: null,
+    }];
+  }
+
+  private async loadRegion(region: RegionFilter, silent = false): Promise<void> {
+    if (this.destroyed) return;
+    const serial = ++this.requestSerial;
+
+    this.regionFilter = region;
+    this.searchMode = false;
+    this.currentLocation = null;
+    this.currentContextLabel = REGION_PRESETS[region].label;
+    if (this.searchInput && !silent) this.searchInput.value = '';
+    this.updateRegionButtons();
+
+    if (this.sourceMode === 'youtube') {
+      const cameras = this.getYoutubeRegionCameras(region);
+      if (serial !== this.requestSerial || this.destroyed) return;
+      this.cameras = cameras;
+      this.selectedCameraId = cameras[0]?.id ?? null;
+
+      if (!silent) {
+        this.setStatus(
+          cameras.length
+            ? `${cameras.length} پخش منتخب YouTube آماده است.`
+            : 'برای این ناحیه پخش YouTube از پیش ثبت‌شده‌ای وجود ندارد.',
+          cameras.length ? 'warning' : 'warning',
+        );
+      }
+      this.render();
       return;
     }
 
-    if (!msg || typeof msg !== 'object') return;
-
-    // Desktop sidecar format
-    if (msg.type === 'yt-ready') {
-      this.markIframeReady(iframe);
+    if (region === 'space') {
+      this.cameras = [];
+      this.selectedCameraId = null;
+      if (!silent) {
+        this.setStatus('Windy وب‌کم زمینی ارائه می‌کند؛ برای نمای فضایی منبع YouTube را انتخاب کنید.', 'warning');
+      }
+      this.render();
       return;
     }
 
-    if (msg.type === 'yt-state' && (msg.state === 1 || msg.state === 3)) {
-      this.markIframeReady(iframe);
+    if (!silent) {
+      this.setBusy(true);
+      this.setStatus(`در حال دریافت Playerهای متحرک Windy برای ${REGION_PRESETS[region].label}…`, 'loading');
+      this.renderLoading('در حال دریافت پخش‌های متحرک Windy…');
+    }
+
+    try {
+      const cameras = await this.fetchWindyRegion(region);
+      if (serial !== this.requestSerial || this.destroyed) return;
+
+      this.cameras = cameras;
+      if (!this.selectedCameraId || !cameras.some(camera => camera.id === this.selectedCameraId)) {
+        this.selectedCameraId = cameras[0]?.id ?? null;
+      }
+
+      if (!silent) {
+        this.setStatus(
+          cameras.length
+            ? `${cameras.length} Player متحرک Windy آماده شد • بدون YouTube`
+            : 'برای این ناحیه Player متحرک Windy پیدا نشد.',
+          cameras.length ? 'success' : 'warning',
+        );
+      }
+      this.render();
+    } catch (error) {
+      if (serial !== this.requestSerial || this.destroyed) return;
+      console.error('[live-webcams] Windy region load failed:', error);
+      if (!silent) {
+        this.cameras = [];
+        this.selectedCameraId = null;
+        this.setStatus('دریافت Playerهای Windy ناموفق بود. سرویس وب‌کم پروژه یا اینترنت را بررسی کنید.', 'error');
+        this.render();
+      }
+    } finally {
+      if (!silent && serial === this.requestSerial) this.setBusy(false);
+    }
+  }
+
+  private async searchCity(): Promise<void> {
+    const query = normalizeCityQuery(this.searchInput?.value ?? '');
+    if (query.length < 2) {
+      this.setStatus('نام شهر را با حداقل دو نویسه وارد کنید.', 'warning');
       return;
     }
 
-    if (msg.type === 'yt-error') {
-      this.markIframeBlocked(iframe);
+    const serial = ++this.requestSerial;
+
+    if (this.sourceMode === 'youtube') {
+      const cameras = this.searchYoutube(query);
+      if (serial !== this.requestSerial || this.destroyed) return;
+
+      this.searchMode = true;
+      this.currentLocation = null;
+      this.currentContextLabel = query;
+      this.cameras = cameras;
+      this.selectedCameraId = cameras[0]?.id ?? null;
+      this.updateRegionButtons();
+      this.setStatus(
+        cameras.some(camera => camera.youtubeVideoId)
+          ? `${cameras.length} نتیجه YouTube از فهرست منتخب پیدا شد.`
+          : 'پخش از پیش ثبت‌شده‌ای برای این شهر نداریم؛ لینک جستجوی YouTube آماده است.',
+        'warning',
+      );
+      this.render();
+      return;
     }
+
+    this.setBusy(true);
+    this.setStatus(`در حال یافتن ${query} و Playerهای Windy اطراف آن…`, 'loading');
+    this.renderLoading('در حال جستجوی شهر و دریافت پخش متحرک…');
+
+    try {
+      const location = await this.geocodeCity(query);
+      if (serial !== this.requestSerial || this.destroyed) return;
+
+      if (!location) {
+        this.searchMode = true;
+        this.currentLocation = null;
+        this.currentContextLabel = query;
+        this.cameras = [];
+        this.updateRegionButtons();
+        this.setStatus(`شهر «${query}» پیدا نشد. نام فارسی یا انگلیسی دیگری امتحان کنید.`, 'warning');
+        this.render();
+        return;
+      }
+
+      let entries = await this.fetchWindyEntriesNear(
+        location.latitude,
+        location.longitude,
+        SEARCH_PRIMARY_RADIUS_KM,
+        SEARCH_RESULT_LIMIT,
+      );
+      if (serial !== this.requestSerial || this.destroyed) return;
+
+      if (entries.length === 0) {
+        entries = await this.fetchWindyEntriesNear(
+          location.latitude,
+          location.longitude,
+          SEARCH_FALLBACK_RADIUS_KM,
+          SEARCH_RESULT_LIMIT,
+        );
+      }
+      if (serial !== this.requestSerial || this.destroyed) return;
+
+      const cameras = await this.hydrateWindyBatch(entries);
+      if (serial !== this.requestSerial || this.destroyed) return;
+
+      this.searchMode = true;
+      this.currentLocation = location;
+      this.currentContextLabel = [location.name, location.country].filter(Boolean).join(' - ');
+      this.cameras = cameras;
+      this.selectedCameraId = cameras[0]?.id ?? null;
+      this.updateRegionButtons();
+
+      this.setStatus(
+        cameras.length
+          ? `${cameras.length} Player متحرک Windy نزدیک ${this.currentContextLabel} پیدا شد.`
+          : `در شعاع ${SEARCH_FALLBACK_RADIUS_KM} کیلومتری ${this.currentContextLabel} Player Windy پیدا نشد.`,
+        cameras.length ? 'success' : 'warning',
+      );
+      this.render();
+    } catch (error) {
+      if (serial !== this.requestSerial || this.destroyed) return;
+      console.error('[live-webcams] Windy city search failed:', error);
+      this.searchMode = true;
+      this.currentLocation = null;
+      this.currentContextLabel = query;
+      this.cameras = [];
+      this.updateRegionButtons();
+      this.setStatus('جستجو انجام نشد. سرویس مکان‌یابی یا سرویس وب‌کم پروژه در دسترس نیست.', 'error');
+      this.render();
+    } finally {
+      if (serial === this.requestSerial) this.setBusy(false);
+    }
+  }
+
+  private clearSearch(): void {
+    this.requestSerial++;
+    this.searchMode = false;
+    this.currentLocation = null;
+    if (this.searchInput) this.searchInput.value = '';
+    this.setStatus(
+      this.sourceMode === 'youtube'
+        ? 'حالت YouTube فعال است.'
+        : 'حالت عمومی فعال است • Player متحرک Windy • جستجو به فارسی و انگلیسی',
+      this.sourceMode === 'youtube' ? 'warning' : 'idle',
+    );
+    void this.loadRegion(this.regionFilter);
+  }
+
+  private async refreshCurrentData(): Promise<void> {
+    if (this.destroyed || this.loading || document.hidden || this.sourceMode !== 'windy') return;
+
+    // Reloading obtains a fresh player URL after the project's own 9-minute cache expires.
+    if (this.searchMode && this.currentLocation) {
+      const query = this.searchInput?.value ?? this.currentLocation.name;
+      if (this.searchInput && !this.searchInput.value) this.searchInput.value = query;
+      await this.searchCity();
+      return;
+    }
+
+    await this.loadRegion(this.regionFilter, true);
+  }
+
+  private renderLoading(message: string): void {
+    this.content.className = 'panel-content rwv5-content';
+    this.content.replaceChildren();
+    const placeholder = document.createElement('div');
+    placeholder.className = 'rwv5-placeholder';
+    placeholder.textContent = message;
+    this.content.appendChild(placeholder);
   }
 
   private render(): void {
-    this.destroyIframes();
+    this.content.className = 'panel-content rwv5-content';
+    this.content.replaceChildren();
 
-    if (!this.isVisible || this.isIdle) {
-      // #6557: a paused/idle state is authoritative content.
-      this.setTrustedContent(trustedHtml(`<div class="webcam-placeholder">${escapeHtml(t('components.webcams.paused'))}</div>`, "legacy direct innerHTML migration"));
+    const context = document.createElement('div');
+    context.className = 'rwv5-context';
+
+    const title = document.createElement('div');
+    title.className = 'rwv5-context-title';
+    title.textContent = this.searchMode
+      ? `نتایج جستجو: ${this.currentContextLabel}`
+      : `وب‌کم‌ها: ${this.currentContextLabel}`;
+
+    const provider = document.createElement('div');
+    provider.className = `rwv5-provider${this.sourceMode === 'youtube' ? ' youtube' : ''}`;
+    provider.textContent = this.sourceMode === 'youtube'
+      ? 'YouTube • منبع اختیاری'
+      : 'Windy Player • پخش متحرک عمومی';
+
+    context.append(title, provider);
+    this.content.appendChild(context);
+
+    if (this.cameras.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'rwv5-placeholder';
+      empty.textContent = this.sourceMode === 'youtube'
+        ? (this.searchMode
+          ? 'برای این شهر پخش YouTube از پیش ثبت‌شده‌ای پیدا نشد.'
+          : 'برای این ناحیه پخش YouTube از پیش ثبت‌شده‌ای وجود ندارد.')
+        : (this.regionFilter === 'space' && !this.searchMode
+          ? 'برای نمای فضایی منبع YouTube را انتخاب کنید؛ Windy وب‌کم زمینی ارائه می‌کند.'
+          : this.searchMode
+            ? 'برای این شهر Player متحرک Windy پیدا نشد. شهر دیگری را جستجو کنید.'
+            : 'در این ناحیه فعلاً Player متحرک Windy پیدا نشد.');
+      this.content.appendChild(empty);
       return;
     }
 
-    if (this.viewMode === 'grid') {
-      this.renderGrid();
-    } else {
+    if (this.viewMode === 'single') {
       this.renderSingle();
+    } else {
+      this.renderGrid();
     }
   }
 
   private renderGrid(): void {
-    if (this.forceSingleView) {
-      this.viewMode = 'single';
-      this.renderSingle();
-      return;
-    }
-
-    setTrustedHtml(this.content, trustedHtml('', "legacy direct innerHTML migration"));
-    this.content.className = 'panel-content webcam-content';
-
     const grid = document.createElement('div');
-    grid.className = 'webcam-grid';
+    grid.className = 'rwv5-grid';
+    const visible = this.searchMode
+      ? this.cameras.slice(0, SEARCH_RESULT_LIMIT)
+      : this.cameras.slice(0, GRID_LIMIT);
 
-    const feeds = this.gridFeeds;
-
-    feeds.forEach((feed) => {
-      const cell = document.createElement('div');
-      cell.className = 'webcam-cell';
-
-      if (this.activeIframeFeedIds.has(feed.id)) {
-        const iframe = this.createIframe(feed);
-        cell.appendChild(iframe);
-        this.iframes.push(iframe);
-        this.trackIframe(iframe, feed, cell);
-
-        const label = document.createElement('div');
-        label.className = 'webcam-cell-label';
-        setTrustedHtml(label, trustedHtml(`<span class="webcam-live-dot"></span><span class="webcam-city">${escapeHtml(feed.city.toUpperCase())}</span>`, "legacy direct innerHTML migration"));
-        cell.appendChild(label);
-      } else {
-        this.renderPreviewTile(cell, feed, 'grid');
-      }
-
-      grid.appendChild(cell);
-    });
-
+    for (const camera of visible) {
+      grid.appendChild(this.createCameraCard(camera));
+    }
     this.content.appendChild(grid);
   }
 
   private renderSingle(): void {
-    setTrustedHtml(this.content, trustedHtml('', "legacy direct innerHTML migration"));
-    this.content.className = 'panel-content webcam-content';
+    const selected =
+      this.cameras.find(camera => camera.id === this.selectedCameraId) ??
+      this.cameras[0];
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'webcam-single';
+    if (!selected) return;
 
-    if (this.activeIframeFeedIds.has(this.activeFeed.id)) {
-      const iframe = this.createIframe(this.activeFeed);
-      wrapper.appendChild(iframe);
-      this.iframes.push(iframe);
-      this.trackIframe(iframe, this.activeFeed, wrapper);
-    } else {
-      this.renderPreviewTile(wrapper, this.activeFeed, 'single');
-    }
+    const root = document.createElement('div');
+    root.className = 'rwv5-single';
+    root.appendChild(this.createCameraCard(selected));
 
-    const switcher = document.createElement('div');
-    switcher.className = 'webcam-switcher';
+    if (this.cameras.length > 1) {
+      const switcher = document.createElement('div');
+      switcher.className = 'rwv5-switcher';
 
-    if (!this.forceSingleView) {
-      const backBtn = document.createElement('button');
-      backBtn.className = 'webcam-feed-btn webcam-back-btn';
-      setTrustedHtml(backBtn, trustedHtml('<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg> Grid', "legacy direct innerHTML migration"));
-      backBtn.addEventListener('click', () => this.setViewMode('grid'));
-      switcher.appendChild(backBtn);
-    }
-
-    this.filteredFeeds.forEach(feed => {
-      const btn = document.createElement('button');
-      btn.className = `webcam-feed-btn${feed.id === this.activeFeed.id ? ' active' : ''}`;
-      btn.textContent = feed.city;
-      btn.addEventListener('click', () => {
-        if (feed.id === this.activeFeed.id) return;
-        // Single view shows one feed at a time — switching keeps playing if a stream was active.
-        const wasPlaying = this.activeIframeFeedIds.size > 0;
-        this.activeIframeFeedIds.clear();
-        this.activeFeed = feed;
-        this.savePrefs();
-        if ((this.alwaysOn || wasPlaying) && this.isVisible && !document.hidden) {
-          this.playFeed(feed, 'single');
-        } else {
+      for (const camera of this.cameras) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `rwv5-switch-btn${camera.id === selected.id ? ' active' : ''}`;
+        button.textContent = camera.title;
+        button.addEventListener('click', () => {
+          this.selectedCameraId = camera.id;
           this.render();
-        }
-      });
-      switcher.appendChild(btn);
-    });
-
-    this.content.appendChild(wrapper);
-    this.content.appendChild(switcher);
-  }
-
-  private destroyIframes(): void {
-    this.iframeTrackers.forEach((tracker, iframe) => {
-      if (tracker.timeout) clearTimeout(tracker.timeout);
-      iframe.src = 'about:blank';
-      iframe.remove();
-    });
-    this.iframeTrackers.clear();
-    this.iframes.forEach(iframe => {
-      if (iframe.isConnected) {
-        iframe.src = 'about:blank';
-        iframe.remove();
-      }
-    });
-    this.iframes = [];
-  }
-
-  private setupIntersectionObserver(): void {
-    this.observer = new IntersectionObserver(
-      (entries) => {
-        const wasVisible = this.isVisible;
-        this.isVisible = entries.some(e => e.isIntersecting);
-        if (this.isVisible && !wasVisible && !this.isIdle) {
-          // startAlwaysOnPlayback renders the wall when always-on; otherwise render the previews once.
-          if (!this.startAlwaysOnPlayback()) this.render();
-        } else if (!this.isVisible && wasVisible) {
-          this.teardownPlayback('scroll-away');
-        }
-      },
-      { threshold: 0.1 }
-    );
-    this.observer.observe(this.element);
-  }
-
-  private applyIdleMode(): void {
-    if (this.alwaysOn) {
-      if (this.idleTimeout) {
-        clearTimeout(this.idleTimeout);
-        this.idleTimeout = null;
-      }
-      if (this.idleDetectionEnabled) {
-        IDLE_ACTIVITY_EVENTS.forEach((event) => {
-          document.removeEventListener(event, this.boundIdleResetHandler);
         });
-        this.idleDetectionEnabled = false;
+        switcher.appendChild(button);
       }
-      this.resumeFeedAfterIdleIds = [];
-      if (this.isIdle && !document.hidden) {
-        this.isIdle = false;
-      }
-      this.startAlwaysOnPlayback();
-      return;
+
+      root.appendChild(switcher);
     }
 
-    if (!this.idleDetectionEnabled) {
-      IDLE_ACTIVITY_EVENTS.forEach((event) => {
-        document.addEventListener(event, this.boundIdleResetHandler, { passive: true });
-      });
-      this.idleDetectionEnabled = true;
-    }
-
-    this.boundIdleResetHandler();
+    this.content.appendChild(root);
   }
 
-  private setupIdleDetection(): void {
-    // Background: always suspend when the document is hidden.
-    this.boundVisibilityHandler = () => {
-      if (document.hidden) {
-        // Tear down live media when the tab is hidden; the preview shell can resume on return.
-        if (this.idleTimeout) clearTimeout(this.idleTimeout);
-        this.teardownPlayback('hidden');
-        return;
-      }
+  private createCameraCard(camera: CameraResult): HTMLElement {
+    const card = document.createElement('article');
+    card.className = `rwv5-card${camera.sourceName === 'YouTube' ? ' rwv5-youtube' : ''}`;
 
-      // Visible again.
-      if (this.isIdle) {
-        this.isIdle = false;
-        if (this.isVisible) this.render();
-      }
+    const playerWrap = document.createElement('div');
+    playerWrap.className = 'rwv5-player-wrap';
 
-      this.applyIdleMode();
-    };
-    document.addEventListener('visibilitychange', this.boundVisibilityHandler);
+    const badge = document.createElement('div');
+    badge.className = 'rwv5-player-badge';
+    const dot = document.createElement('span');
+    dot.className = 'rwv5-dot';
+    const badgeText = document.createElement('span');
+    badgeText.textContent = camera.sourceName === 'YouTube'
+      ? 'YouTube'
+      : 'Windy Player';
+    badge.append(dot, badgeText);
 
-    // Eco mode idle timer.
-    this.boundIdleResetHandler = () => {
-      if (this.alwaysOn) return;
-      if (this.idleTimeout) clearTimeout(this.idleTimeout);
-      if (this.isIdle) {
-        this.isIdle = false;
-        if (this.isVisible) {
-          // Restore the whole wall that was paused for idle.
-          const resumeIds = this.resumeFeedAfterIdleIds;
-          this.resumeFeedAfterIdleIds = [];
-          for (const id of resumeIds) {
-            if (WEBCAM_FEEDS.some(feed => feed.id === id)) this.activeIframeFeedIds.add(id);
-          }
-          this.render();
-        }
-      }
-      this.idleTimeout = setTimeout(() => {
-        // Set isIdle before teardown so teardownPlayback skips its re-render; the placeholder is written below.
-        this.isIdle = true;
-        this.teardownPlayback('idle');
-        // #6557: a settled idle state is authoritative content.
-        this.setTrustedContent(trustedHtml(`<div class="webcam-placeholder">${escapeHtml(t('components.webcams.pausedIdle'))}</div>`, "legacy direct innerHTML migration"));
-      }, ECO_IDLE_PAUSE_MS);
-    };
+    if (camera.youtubeVideoId) {
+      const iframe = document.createElement('iframe');
+      iframe.className = 'rwv5-youtube-frame';
+      iframe.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(camera.youtubeVideoId)}?autoplay=0&mute=1&controls=1&playsinline=1&rel=0`;
+      iframe.title = `${camera.title} - YouTube`;
+      iframe.allow = 'autoplay; encrypted-media; picture-in-picture';
+      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+      iframe.allowFullscreen = true;
+      iframe.setAttribute('loading', 'lazy');
+      playerWrap.appendChild(iframe);
+    } else if (camera.playerUrl) {
+      const iframe = document.createElement('iframe');
+      iframe.className = 'rwv5-player';
+      iframe.src = camera.playerUrl;
+      iframe.title = `${camera.title} - Windy webcam player`;
+      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups');
+      iframe.setAttribute('frameborder', '0');
+      iframe.allow = 'autoplay; encrypted-media; picture-in-picture';
+      iframe.allowFullscreen = true;
+      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+      iframe.setAttribute('loading', 'lazy');
+      playerWrap.appendChild(iframe);
+    } else if (camera.thumbnailUrl) {
+      const image = document.createElement('img');
+      image.src = camera.thumbnailUrl;
+      image.alt = camera.title;
+      image.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
+      image.loading = 'lazy';
+      playerWrap.appendChild(image);
+      badgeText.textContent = 'آخرین تصویر';
+    } else {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'rwv5-placeholder';
+      placeholder.style.minHeight = '190px';
+      placeholder.textContent = 'Player این دوربین در دسترس نیست.';
+      playerWrap.appendChild(placeholder);
+    }
 
-    this.applyIdleMode();
+    playerWrap.appendChild(badge);
+
+    const body = document.createElement('div');
+    body.className = 'rwv5-card-body';
+
+    const title = document.createElement('div');
+    title.className = 'rwv5-card-title';
+    title.textContent = camera.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'rwv5-card-meta';
+    const metaParts: string[] = [];
+    if (camera.country) metaParts.push(camera.country);
+    if (camera.category) metaParts.push(camera.category);
+    const distance = formatDistance(camera.distanceKm);
+    if (distance) metaParts.push(`فاصله ${distance}`);
+    if (camera.sourceName === 'Windy') metaParts.push('پخش متحرک');
+    meta.textContent = metaParts.join(' • ');
+
+    const footer = document.createElement('div');
+    footer.className = 'rwv5-card-footer';
+
+    const source = document.createElement('div');
+    source.className = 'rwv5-source';
+    source.textContent = camera.sourceName === 'YouTube'
+      ? 'منبع: YouTube'
+      : 'منبع: Windy / سرویس وب‌کم رصدیار';
+
+    footer.appendChild(source);
+
+    if (camera.sourceUrl) {
+      const openButton = document.createElement('button');
+      openButton.type = 'button';
+      openButton.className = `rwv5-open${camera.sourceName === 'YouTube' ? ' youtube' : ''}`;
+      openButton.textContent = camera.sourceName === 'YouTube'
+        ? 'باز کردن در YouTube'
+        : 'باز کردن در Windy';
+      openButton.addEventListener('click', event => {
+        event.stopPropagation();
+        window.open(camera.sourceUrl!, '_blank', 'noopener,noreferrer');
+      });
+      footer.appendChild(openButton);
+    }
+
+    body.append(title, meta, footer);
+    card.append(playerWrap, body);
+    return card;
   }
 
   public refresh(): void {
-    if (this.isVisible && !this.isIdle) {
-      this.render();
-    }
-  }
-
-  public stopLiveMediaForClose(): void {
-    this.resumeFeedAfterIdleIds = [];
-    if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
-    this.clearActivePlayback();
-    if (this.isVisible && !this.isIdle && this.element.isConnected) {
-      this.render();
-    }
-  }
-
-  public resumeLiveMediaForShow(): void {
-    if (!this.alwaysOn || document.hidden) return;
-    this.isVisible = this.isVisible || this.isPanelVisible();
-    this.startAlwaysOnPlayback();
+    void this.refreshCurrentData();
   }
 
   public destroy(): void {
-    // Disconnect the IntersectionObserver FIRST so a scroll-driven callback can't
-    // re-render / re-create iframes (with leaked ready-timeouts) mid-teardown.
-    this.observer?.disconnect();
-    unregisterLiveMediaStarter('live-webcams', this.boundPlayAllStarter);
-    if (this.idleTimeout) {
-      clearTimeout(this.idleTimeout);
-      this.idleTimeout = null;
+    this.destroyed = true;
+    this.requestSerial++;
+
+    if (this.refreshTimer != null) {
+      window.clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
     }
-    document.removeEventListener('visibilitychange', this.boundVisibilityHandler);
-    document.removeEventListener('keydown', this.boundFullscreenEscHandler);
-    window.removeEventListener('message', this.boundEmbedMessageHandler);
-    IDLE_ACTIVITY_EVENTS.forEach(event => {
-      document.removeEventListener(event, this.boundIdleResetHandler);
+
+    this.content.querySelectorAll('iframe').forEach(frame => {
+      frame.src = 'about:blank';
+      frame.remove();
     });
-    if (this.isFullscreen) this.toggleFullscreen();
-    this.unsubscribeStreamSettings?.();
-    this.unsubscribeStreamSettings = null;
-    this.destroyIframes();
+
+    if (this.isFullscreen) {
+      this.element.classList.remove('rwv5-fullscreen');
+      document.body.classList.remove('rwv5-fullscreen-active');
+      this.isFullscreen = false;
+    }
+
+    this.searchBar?.remove();
+    this.sourceBar?.remove();
+    this.controlsBar?.remove();
     super.destroy();
   }
 }

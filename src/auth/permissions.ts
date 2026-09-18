@@ -27,6 +27,7 @@ export type RasadyarPermission =
   | "users.edit"
   | "users.delete"
   | "system.settings"
+  | "system.update"
   | "profile.edit";
 
 const SUPERADMIN_PERMISSIONS: readonly RasadyarPermission[] = [
@@ -49,6 +50,7 @@ const SUPERADMIN_PERMISSIONS: readonly RasadyarPermission[] = [
   "users.delete",
 
   "system.settings",
+  "system.update",
   "profile.edit",
 ];
 

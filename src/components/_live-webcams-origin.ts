@@ -1,37 +1,36 @@
-const YOUTUBE_EMBED_ORIGINS = new Set([
-  'https://www.youtube.com',
-  'https://www.youtube-nocookie.com',
-]);
+/**
+ * Validates postMessage origins received from a webcam embed.
+ *
+ * A message is accepted only when its origin exactly matches the origin
+ * of the iframe that is expected to have sent it.
+ *
+ * This covers:
+ * - YouTube web embeds
+ * - YouTube privacy-enhanced embeds
+ * - Rasadyar desktop local embed proxy
+ *
+ * Invalid, opaque, malformed, or mismatched origins are rejected.
+ */
+export function isAllowedWebcamEmbedMessageOrigin(
+  messageOrigin: string,
+  iframeSrc: string,
+): boolean {
+  if (!messageOrigin || messageOrigin === 'null' || !iframeSrc) {
+    return false;
+  }
 
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
-}
-
-function parseAbsoluteUrl(value: string): URL | null {
   try {
-    return new URL(value);
+    const iframeUrl = new URL(iframeSrc, window.location.href);
+
+    if (
+      iframeUrl.protocol !== 'https:' &&
+      iframeUrl.protocol !== 'http:'
+    ) {
+      return false;
+    }
+
+    return messageOrigin === iframeUrl.origin;
   } catch {
-    return null;
+    return false;
   }
-}
-
-export function isAllowedWebcamEmbedMessageOrigin(eventOrigin: string, iframeSrc: string): boolean {
-  if (!eventOrigin || eventOrigin === 'null') return false;
-
-  const iframeUrl = parseAbsoluteUrl(iframeSrc);
-  if (!iframeUrl) return false;
-
-  if (YOUTUBE_EMBED_ORIGINS.has(iframeUrl.origin) && iframeUrl.pathname.startsWith('/embed/')) {
-    return eventOrigin === iframeUrl.origin;
-  }
-
-  if (
-    iframeUrl.protocol === 'http:' &&
-    iframeUrl.pathname === '/api/youtube-embed' &&
-    isLoopbackHostname(iframeUrl.hostname)
-  ) {
-    return eventOrigin === iframeUrl.origin;
-  }
-
-  return false;
 }

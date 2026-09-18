@@ -116,7 +116,14 @@ async function readJsonBody(request: Request): Promise<any> {
 
 function routeParts(request: Request): string[] {
   const url = new URL(request.url);
-  const rawPath = url.searchParams.get('path') ?? '';
+  const explicitPath = url.searchParams.get('path');
+  const routePrefix = '/api/rasadyar-auth/';
+  const rawPath =
+    explicitPath !== null
+      ? explicitPath
+      : url.pathname.startsWith(routePrefix)
+        ? url.pathname.slice(routePrefix.length)
+        : '';
 
   return rawPath
     .split('/')
@@ -258,25 +265,25 @@ async function handleAuthRequest(request: Request): Promise<Response> {
   throw new RasadyarAuthError('not-found', 404);
 }
 
-export default {
-  async fetch(request: Request): Promise<Response> {
-    try {
-      return await handleAuthRequest(request);
-    } catch (error: unknown) {
-      if (error instanceof RasadyarAuthError) {
-        return json(error.status, {
-          ok: false,
-          code: error.code,
-          message: error.code,
-        });
-      }
-
-      console.error('[rasadyar-auth] production error:', error);
-      return json(500, {
+export default async function rasadyarAuthHandler(
+  request: Request,
+): Promise<Response> {
+  try {
+    return await handleAuthRequest(request);
+  } catch (error: unknown) {
+    if (error instanceof RasadyarAuthError) {
+      return json(error.status, {
         ok: false,
-        code: 'internal-error',
-        message: 'internal-error',
+        code: error.code,
+        message: error.code,
       });
     }
-  },
-};
+
+    console.error('[rasadyar-auth] production error:', error);
+    return json(500, {
+      ok: false,
+      code: 'internal-error',
+      message: 'internal-error',
+    });
+  }
+}

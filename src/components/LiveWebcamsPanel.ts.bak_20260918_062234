@@ -1,0 +1,1235 @@
+import { Panel } from './Panel';
+import { t } from '../services/i18n';
+
+type RegionFilter = 'all' | 'middle-east' | 'europe' | 'americas' | 'asia' | 'space';
+type ViewMode = 'grid' | 'single';
+type StatusKind = 'idle' | 'loading' | 'success' | 'warning' | 'error';
+
+interface SearchLocation {
+  name: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+}
+
+interface AnchorLocation {
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
+interface CameraView {
+  render?: 'image' | 'link' | 'none' | string;
+  url?: string | null;
+  url_type?: string | null;
+  hosted?: string | null;
+}
+
+interface CameraAttribution {
+  name?: string | null;
+  url?: string | null;
+  required?: boolean | null;
+}
+
+interface OpenEyeCameraRecord {
+  id?: string;
+  handle?: string;
+  title?: string;
+  category?: string;
+  lat?: number;
+  lon?: number;
+  live?: boolean;
+  distance_km?: number;
+  last_frame_age_s?: number;
+  frame_interval_s?: number;
+  preview_url?: string | null;
+  source_url?: string | null;
+  view?: CameraView | null;
+  redistribution?: {
+    attribution?: CameraAttribution | null;
+  } | null;
+}
+
+interface CameraResult {
+  id: string;
+  handle: string | null;
+  title: string;
+  category: string;
+  latitude: number | null;
+  longitude: number | null;
+  live: boolean;
+  previewUrl: string | null;
+  sourceUrl: string | null;
+  sourceName: string | null;
+  distanceKm: number | null;
+  lastFrameAgeSeconds: number | null;
+  frameIntervalSeconds: number | null;
+}
+
+interface RegionPreset {
+  label: string;
+  anchors?: AnchorLocation[];
+  query?: string;
+}
+
+const OPENEYE_CATALOG_URL = 'https://api.openeye.cam/v1/catalog';
+const OPENEYE_FEATURED_URL = 'https://api.openeye.cam/v1/catalog/featured';
+const OPENEYE_OFFLINE_IMAGE = 'https://api.openeye.cam/v1/offline.webp';
+const OPEN_METEO_GEOCODING_URL = 'https://geocoding-api.open-meteo.com/v1/search';
+
+const SEARCH_PRIMARY_RADIUS_KM = 80;
+const SEARCH_FALLBACK_RADIUS_KM = 250;
+const SEARCH_RESULT_LIMIT = 8;
+const GRID_LIMIT = 4;
+const AUTO_REFRESH_MS = 60_000;
+
+// These providers are explicitly excluded from the result set so this panel never
+// needs to connect to them directly. The search/catalog layer stays on OpenEye.
+const BLOCKED_PROVIDER_MARKERS = [
+  'youtube.com',
+  'youtu.be',
+  'ytimg.com',
+  'googlevideo.com',
+  'twitch.tv',
+  'player.twitch.tv',
+];
+
+const REGION_PRESETS: Record<RegionFilter, RegionPreset> = {
+  all: {
+    label: 'همه',
+    anchors: [
+      { name: 'Tehran', latitude: 35.6892, longitude: 51.3890 },
+      { name: 'Jerusalem', latitude: 31.7683, longitude: 35.2137 },
+      { name: 'Kyiv', latitude: 50.4501, longitude: 30.5234 },
+      { name: 'Washington DC', latitude: 38.9072, longitude: -77.0369 },
+    ],
+  },
+  'middle-east': {
+    label: 'خاورمیانه',
+    anchors: [
+      { name: 'Tehran', latitude: 35.6892, longitude: 51.3890 },
+      { name: 'Jerusalem', latitude: 31.7683, longitude: 35.2137 },
+      { name: 'Beirut', latitude: 33.8938, longitude: 35.5018 },
+      { name: 'Dubai', latitude: 25.2048, longitude: 55.2708 },
+    ],
+  },
+  europe: {
+    label: 'اروپا',
+    anchors: [
+      { name: 'Kyiv', latitude: 50.4501, longitude: 30.5234 },
+      { name: 'Paris', latitude: 48.8566, longitude: 2.3522 },
+      { name: 'London', latitude: 51.5074, longitude: -0.1278 },
+      { name: 'Warsaw', latitude: 52.2297, longitude: 21.0122 },
+    ],
+  },
+  americas: {
+    label: 'قاره آمریکا',
+    anchors: [
+      { name: 'New York', latitude: 40.7128, longitude: -74.0060 },
+      { name: 'Washington DC', latitude: 38.9072, longitude: -77.0369 },
+      { name: 'Los Angeles', latitude: 34.0522, longitude: -118.2437 },
+      { name: 'Miami', latitude: 25.7617, longitude: -80.1918 },
+    ],
+  },
+  asia: {
+    label: 'آسیا',
+    anchors: [
+      { name: 'Tokyo', latitude: 35.6762, longitude: 139.6503 },
+      { name: 'Seoul', latitude: 37.5665, longitude: 126.9780 },
+      { name: 'Taipei', latitude: 25.0330, longitude: 121.5654 },
+      { name: 'Singapore', latitude: 1.3521, longitude: 103.8198 },
+    ],
+  },
+  space: {
+    label: 'فضا',
+    query: 'space station ISS',
+  },
+};
+
+const REGION_ORDER: RegionFilter[] = ['all', 'middle-east', 'europe', 'americas', 'asia', 'space'];
+
+function normalizeCityQuery(value: string): string {
+  return value
+    .replace(/\u064A/g, '\u06CC')
+    .replace(/\u0643/g, '\u06A9')
+    .replace(/\u200C/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function containsPersianScript(value: string): boolean {
+  return /[\u0600-\u06FF]/.test(value);
+}
+
+function isBlockedProviderRecord(record: unknown): boolean {
+  let serialized = '';
+  try {
+    serialized = JSON.stringify(record).toLowerCase();
+  } catch {
+    return false;
+  }
+  return BLOCKED_PROVIDER_MARKERS.some(marker => serialized.includes(marker));
+}
+
+function formatDistance(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '';
+  if (value < 1) return `${Math.max(1, Math.round(value * 1000))} متر`;
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} کیلومتر`;
+}
+
+function formatFrameAge(seconds: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '';
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} ثانیه پیش`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} دقیقه پیش`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)} ساعت پیش`;
+  return `${Math.round(seconds / 86400)} روز پیش`;
+}
+
+function extractRows(payload: unknown): OpenEyeCameraRecord[] {
+  if (Array.isArray(payload)) return payload as OpenEyeCameraRecord[];
+  if (!payload || typeof payload !== 'object') return [];
+
+  const objectPayload = payload as {
+    items?: unknown;
+    cameras?: unknown;
+    results?: unknown;
+    webcams?: unknown;
+  };
+
+  const candidates = [
+    objectPayload.items,
+    objectPayload.cameras,
+    objectPayload.results,
+    objectPayload.webcams,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate as OpenEyeCameraRecord[];
+  }
+
+  return [];
+}
+
+function mapCameraRecord(record: OpenEyeCameraRecord): CameraResult | null {
+  const id = record.id?.trim();
+  if (!id || isBlockedProviderRecord(record)) return null;
+
+  const viewUrl = record.view?.url?.trim() || null;
+  const previewUrl =
+    record.view?.render === 'image'
+      ? (viewUrl || record.preview_url?.trim() || null)
+      : (record.preview_url?.trim() || null);
+
+  const attribution = record.redistribution?.attribution ?? null;
+  const sourceUrl =
+    record.view?.render === 'link'
+      ? viewUrl
+      : (record.source_url?.trim() || attribution?.url?.trim() || null);
+
+  return {
+    id,
+    handle: record.handle?.trim() || null,
+    title: record.title?.trim() || 'وب‌کم عمومی',
+    category: record.category?.trim() || 'webcam',
+    latitude: typeof record.lat === 'number' ? record.lat : null,
+    longitude: typeof record.lon === 'number' ? record.lon : null,
+    live: record.live === true,
+    previewUrl,
+    sourceUrl,
+    sourceName: attribution?.name?.trim() || null,
+    distanceKm: typeof record.distance_km === 'number' ? record.distance_km : null,
+    lastFrameAgeSeconds: typeof record.last_frame_age_s === 'number' ? record.last_frame_age_s : null,
+    frameIntervalSeconds: typeof record.frame_interval_s === 'number' ? record.frame_interval_s : null,
+  };
+}
+
+function uniqueCameras(cameras: CameraResult[]): CameraResult[] {
+  const seen = new Set<string>();
+  const output: CameraResult[] = [];
+  for (const camera of cameras) {
+    if (seen.has(camera.id)) continue;
+    seen.add(camera.id);
+    output.push(camera);
+  }
+  return output;
+}
+
+export class LiveWebcamsPanel extends Panel {
+  private regionFilter: RegionFilter = 'all';
+  private viewMode: ViewMode = 'grid';
+  private cameras: CameraResult[] = [];
+  private selectedCameraId: string | null = null;
+  private searchMode = false;
+  private currentLocation: SearchLocation | null = null;
+  private currentContextLabel = 'نمای جهانی';
+  private loading = false;
+  private abortController: AbortController | null = null;
+  private refreshTimer: number | null = null;
+  private destroyed = false;
+
+  private searchBar: HTMLElement | null = null;
+  private searchInput: HTMLInputElement | null = null;
+  private searchButton: HTMLButtonElement | null = null;
+  private statusLine: HTMLElement | null = null;
+  private controlsBar: HTMLElement | null = null;
+  private fullscreenButton: HTMLButtonElement | null = null;
+  private isFullscreen = false;
+
+  constructor() {
+    super({
+      id: 'live-webcams',
+      title: t('panels.liveWebcams'),
+      className: 'panel-wide',
+      closable: true,
+      collapsible: true,
+      infoTooltip: t('components.liveWebcams.infoTooltip'),
+    });
+
+    this.installStyles();
+    this.createFullscreenButton();
+    this.createSearchBar();
+    this.createControlsBar();
+    this.renderLoading('در حال دریافت وب‌کم‌های عمومی…');
+
+    void this.loadRegion('all');
+    this.refreshTimer = window.setInterval(() => {
+      void this.refreshCurrentData();
+    }, AUTO_REFRESH_MS);
+  }
+
+  private installStyles(): void {
+    const styleId = 'oe-live-webcams-panel-styles-v2';
+    if (document.getElementById(styleId)) return;
+
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      .oe-webcam-searchbar {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) auto auto;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 12px 7px;
+        background: linear-gradient(180deg, #071612 0%, #06110e 100%);
+        border-top: 1px solid rgba(45, 212, 191, .14);
+        border-bottom: 1px solid rgba(45, 212, 191, .18);
+        direction: rtl;
+        position: relative;
+        z-index: 4;
+        overflow: visible !important;
+        min-height: 44px;
+        box-sizing: border-box;
+      }
+
+      .oe-webcam-search-input {
+        width: 100%;
+        min-width: 0;
+        height: 36px;
+        box-sizing: border-box;
+        border: 1px solid rgba(45, 212, 191, .32);
+        border-radius: 8px;
+        background: #0a1915;
+        color: #eaf8f3;
+        padding: 0 12px;
+        outline: none;
+        font: inherit;
+        font-size: 12px;
+        transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+      }
+
+      .oe-webcam-search-input::placeholder { color: #728d85; }
+      .oe-webcam-search-input:focus {
+        border-color: #2dd4bf;
+        background: #0c201b;
+        box-shadow: 0 0 0 3px rgba(45, 212, 191, .10);
+      }
+
+      .oe-webcam-search-btn,
+      .oe-webcam-clear-btn {
+        height: 36px;
+        border-radius: 8px;
+        padding: 0 14px;
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+        transition: filter .14s ease, transform .14s ease, border-color .14s ease;
+      }
+
+      .oe-webcam-search-btn {
+        border: 1px solid #168d82;
+        background: #0f766e;
+        color: #f0fdfa;
+        font-weight: 700;
+      }
+      .oe-webcam-search-btn:hover:not(:disabled) { filter: brightness(1.12); transform: translateY(-1px); }
+      .oe-webcam-search-btn:disabled { opacity: .55; cursor: wait; }
+
+      .oe-webcam-clear-btn {
+        border: 1px solid #30463f;
+        background: #10201c;
+        color: #abc3bb;
+      }
+      .oe-webcam-clear-btn:hover { border-color: #54756b; color: #e1f0eb; }
+
+      .oe-webcam-status {
+        grid-column: 1 / -1;
+        min-height: 16px;
+        font-size: 10px;
+        line-height: 1.5;
+        color: #78958c;
+        text-align: right;
+      }
+      .oe-webcam-status[data-kind="loading"] { color: #f6c453; }
+      .oe-webcam-status[data-kind="success"] { color: #6ee7b7; }
+      .oe-webcam-status[data-kind="warning"] { color: #f6c453; }
+      .oe-webcam-status[data-kind="error"] { color: #fda4af; }
+
+      .oe-webcam-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 7px 10px;
+        background: #07110f;
+        border-bottom: 1px solid #16322b;
+        direction: rtl;
+        position: relative;
+        z-index: 3;
+        min-height: 38px;
+        box-sizing: border-box;
+      }
+
+      .oe-webcam-region-group,
+      .oe-webcam-view-group { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+
+      .oe-webcam-region-btn,
+      .oe-webcam-view-btn {
+        min-height: 28px;
+        border: 1px solid #263d36;
+        background: #0a1512;
+        color: #8fa7a0;
+        padding: 4px 10px;
+        border-radius: 5px;
+        font: inherit;
+        font-size: 10px;
+        cursor: pointer;
+      }
+      .oe-webcam-region-btn:hover,
+      .oe-webcam-view-btn:hover { border-color: #2f7668; color: #cce6de; }
+      .oe-webcam-region-btn.active,
+      .oe-webcam-view-btn.active {
+        border-color: #16a394;
+        background: #0d5f57;
+        color: #f0fdfa;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);
+      }
+
+      .oe-webcam-content {
+        min-height: 340px;
+        background: #050d0b;
+        padding: 0 !important;
+        overflow: auto;
+      }
+
+      .oe-webcam-context {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 11px;
+        direction: rtl;
+        background: #081713;
+        border-bottom: 1px solid #17342d;
+      }
+      .oe-webcam-context-title { color: #dff4ee; font-size: 11px; font-weight: 700; }
+      .oe-webcam-provider { color: #5eead4; font-size: 9px; white-space: nowrap; }
+
+      .oe-webcam-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        background: #16342c;
+      }
+
+      .oe-webcam-card {
+        min-width: 0;
+        background: linear-gradient(180deg, #081612 0%, #06100e 100%);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .oe-webcam-image-wrap {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        background: #030807;
+        overflow: hidden;
+      }
+      .oe-webcam-image {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        background: #030807;
+      }
+      .oe-webcam-image-placeholder {
+        width: 100%;
+        height: 100%;
+        min-height: 150px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        padding: 14px;
+        box-sizing: border-box;
+        color: #748f87;
+        background: radial-gradient(circle at 50% 35%, rgba(45,212,191,.08), transparent 42%), #040b09;
+        font-size: 10px;
+      }
+
+      .oe-webcam-freshness {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.08);
+        background: rgba(3, 12, 10, .82);
+        backdrop-filter: blur(5px);
+        color: #e8f6f1;
+        font-size: 9px;
+      }
+      .oe-webcam-dot { width: 6px; height: 6px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 3px rgba(52,211,153,.12); }
+      .oe-webcam-freshness.stale .oe-webcam-dot { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.12); }
+      .oe-webcam-freshness.unknown .oe-webcam-dot { background: #64748b; box-shadow: none; }
+
+      .oe-webcam-card-body {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 9px 10px 10px;
+        direction: rtl;
+        text-align: right;
+      }
+      .oe-webcam-card-title { color: #edf9f5; font-size: 11px; line-height: 1.45; font-weight: 700; }
+      .oe-webcam-card-meta { color: #839f96; font-size: 9px; line-height: 1.5; }
+      .oe-webcam-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .oe-webcam-source { color: #5eead4; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .oe-webcam-open {
+        flex: 0 0 auto;
+        border: 1px solid #31564c;
+        border-radius: 6px;
+        background: #0d2922;
+        color: #d2f7ec;
+        padding: 5px 8px;
+        font: inherit;
+        font-size: 9px;
+        cursor: pointer;
+      }
+      .oe-webcam-open:hover { border-color: #2dd4bf; background: #10382f; }
+
+      .oe-webcam-single {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+      }
+      .oe-webcam-single .oe-webcam-image-wrap { aspect-ratio: 16 / 8.4; }
+      .oe-webcam-switcher {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        padding: 8px 10px;
+        background: #07120f;
+        border-top: 1px solid #17342d;
+        direction: rtl;
+      }
+      .oe-webcam-switch-btn {
+        border: 1px solid #28463e;
+        border-radius: 5px;
+        background: #0b1b17;
+        color: #91aaa2;
+        padding: 5px 8px;
+        font: inherit;
+        font-size: 9px;
+        cursor: pointer;
+      }
+      .oe-webcam-switch-btn.active { border-color: #20b8a7; color: #e7faf5; background: #0b5d54; }
+
+      .oe-webcam-placeholder {
+        min-height: 300px;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        box-sizing: border-box;
+        text-align: center;
+        color: #8aa49c;
+        background: radial-gradient(circle at 50% 30%, rgba(45,212,191,.06), transparent 40%), #050d0b;
+        direction: rtl;
+        font-size: 11px;
+        line-height: 1.8;
+      }
+
+      .oe-webcam-fullscreen {
+        position: fixed !important;
+        inset: 10px !important;
+        width: auto !important;
+        height: auto !important;
+        z-index: 10000 !important;
+        background: #04100d !important;
+        box-shadow: 0 20px 70px rgba(0,0,0,.65) !important;
+      }
+      body.oe-webcam-fullscreen-active { overflow: hidden !important; }
+
+      @media (max-width: 760px) {
+        .oe-webcam-searchbar { grid-template-columns: minmax(0, 1fr) auto; }
+        .oe-webcam-clear-btn { grid-column: 1 / -1; }
+        .oe-webcam-grid { grid-template-columns: 1fr; }
+        .oe-webcam-provider { white-space: normal; text-align: left; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  private createFullscreenButton(): void {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'live-mute-btn';
+    button.title = 'تمام‌صفحه';
+    button.setAttribute('aria-label', 'تمام‌صفحه');
+    button.textContent = '⛶';
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.toggleFullscreen();
+    });
+    this.fullscreenButton = button;
+    this.element.querySelector('.panel-header')?.appendChild(button);
+  }
+
+  private toggleFullscreen(): void {
+    this.isFullscreen = !this.isFullscreen;
+    this.element.classList.toggle('oe-webcam-fullscreen', this.isFullscreen);
+    document.body.classList.toggle('oe-webcam-fullscreen-active', this.isFullscreen);
+    if (this.fullscreenButton) {
+      this.fullscreenButton.title = this.isFullscreen ? 'خروج از تمام‌صفحه' : 'تمام‌صفحه';
+    }
+  }
+
+  private createSearchBar(): void {
+    const root = document.createElement('div');
+    root.className = 'oe-webcam-searchbar';
+
+    const input = document.createElement('input');
+    input.type = 'search';
+    input.className = 'oe-webcam-search-input';
+    input.dir = 'auto';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.placeholder = 'نام شهر را فارسی یا انگلیسی وارد کنید؛ مثال: تهران / Tehran / Tabriz';
+    input.setAttribute('aria-label', 'جستجوی شهر برای وب‌کم');
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void this.searchCity();
+      } else if (event.key === 'Escape') {
+        this.clearSearch();
+      }
+    });
+
+    const searchButton = document.createElement('button');
+    searchButton.type = 'button';
+    searchButton.className = 'oe-webcam-search-btn';
+    searchButton.textContent = 'جستجوی وب‌کم';
+    searchButton.addEventListener('click', () => void this.searchCity());
+
+    const clearButton = document.createElement('button');
+    clearButton.type = 'button';
+    clearButton.className = 'oe-webcam-clear-btn';
+    clearButton.textContent = 'بازگشت';
+    clearButton.addEventListener('click', () => this.clearSearch());
+
+    const status = document.createElement('div');
+    status.className = 'oe-webcam-status';
+    status.dataset.kind = 'idle';
+    status.textContent = 'جستجو به فارسی و انگلیسی • منبع تصویری OpenEye • بدون اتصال مستقیم به YouTube';
+
+    root.append(input, searchButton, clearButton, status);
+    this.searchInput = input;
+    this.searchButton = searchButton;
+    this.statusLine = status;
+    this.searchBar = root;
+
+    this.element.insertBefore(root, this.content);
+  }
+
+  private createControlsBar(): void {
+    const root = document.createElement('div');
+    root.className = 'oe-webcam-controls';
+
+    const regionGroup = document.createElement('div');
+    regionGroup.className = 'oe-webcam-region-group';
+
+    for (const region of REGION_ORDER) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `oe-webcam-region-btn${region === this.regionFilter ? ' active' : ''}`;
+      button.dataset.region = region;
+      button.textContent = REGION_PRESETS[region].label;
+      button.addEventListener('click', () => void this.loadRegion(region));
+      regionGroup.appendChild(button);
+    }
+
+    const viewGroup = document.createElement('div');
+    viewGroup.className = 'oe-webcam-view-group';
+
+    const gridButton = document.createElement('button');
+    gridButton.type = 'button';
+    gridButton.className = 'oe-webcam-view-btn active';
+    gridButton.dataset.mode = 'grid';
+    gridButton.textContent = '▦';
+    gridButton.title = 'نمای شبکه‌ای';
+    gridButton.addEventListener('click', () => this.setViewMode('grid'));
+
+    const singleButton = document.createElement('button');
+    singleButton.type = 'button';
+    singleButton.className = 'oe-webcam-view-btn';
+    singleButton.dataset.mode = 'single';
+    singleButton.textContent = '▣';
+    singleButton.title = 'نمای تکی';
+    singleButton.addEventListener('click', () => this.setViewMode('single'));
+
+    viewGroup.append(gridButton, singleButton);
+    root.append(regionGroup, viewGroup);
+    this.controlsBar = root;
+    this.element.insertBefore(root, this.content);
+  }
+
+  private setStatus(message: string, kind: StatusKind = 'idle'): void {
+    if (!this.statusLine) return;
+    this.statusLine.textContent = message;
+    this.statusLine.dataset.kind = kind;
+  }
+
+  private setBusy(busy: boolean): void {
+    this.loading = busy;
+    if (this.searchButton) {
+      this.searchButton.disabled = busy;
+      this.searchButton.textContent = busy ? 'در حال جستجو…' : 'جستجوی وب‌کم';
+    }
+    if (this.searchInput) this.searchInput.disabled = busy;
+  }
+
+  private updateRegionButtons(): void {
+    this.controlsBar?.querySelectorAll<HTMLButtonElement>('.oe-webcam-region-btn').forEach(button => {
+      button.classList.toggle('active', button.dataset.region === this.regionFilter && !this.searchMode);
+    });
+  }
+
+  private setViewMode(mode: ViewMode): void {
+    if (this.viewMode === mode) return;
+    this.viewMode = mode;
+    this.controlsBar?.querySelectorAll<HTMLButtonElement>('.oe-webcam-view-btn').forEach(button => {
+      button.classList.toggle('active', button.dataset.mode === mode);
+    });
+    this.render();
+  }
+
+  private async requestJson(url: string, signal: AbortSignal): Promise<unknown> {
+    const response = await fetch(url, {
+      signal,
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json() as Promise<unknown>;
+  }
+
+  private async geocodeCity(query: string, signal: AbortSignal): Promise<SearchLocation | null> {
+    const params = new URLSearchParams({
+      name: query,
+      count: '5',
+      language: containsPersianScript(query) ? 'fa' : 'en',
+      format: 'json',
+    });
+
+    const payload = await this.requestJson(`${OPEN_METEO_GEOCODING_URL}?${params.toString()}`, signal) as {
+      results?: Array<{
+        name?: string;
+        country?: string;
+        latitude?: number;
+        longitude?: number;
+        population?: number;
+      }>;
+    };
+
+    const candidates = (payload.results ?? [])
+      .filter(item =>
+        typeof item.name === 'string' &&
+        typeof item.latitude === 'number' &&
+        typeof item.longitude === 'number'
+      )
+      .sort((a, b) => (b.population ?? 0) - (a.population ?? 0));
+
+    const best = candidates[0];
+    if (!best || typeof best.latitude !== 'number' || typeof best.longitude !== 'number') return null;
+
+    return {
+      name: best.name ?? query,
+      country: best.country ?? '',
+      latitude: best.latitude,
+      longitude: best.longitude,
+    };
+  }
+
+  private async fetchCamerasNear(
+    latitude: number,
+    longitude: number,
+    radiusKm: number,
+    limit: number,
+    signal: AbortSignal,
+  ): Promise<CameraResult[]> {
+    const params = new URLSearchParams({
+      near: `${latitude},${longitude}`,
+      radius_km: String(radiusKm),
+      embeddable: '1',
+      limit: String(limit),
+    });
+
+    const payload = await this.requestJson(`${OPENEYE_CATALOG_URL}?${params.toString()}`, signal);
+    const rows = extractRows(payload);
+
+    return uniqueCameras(
+      rows
+        .map(mapCameraRecord)
+        .filter((camera): camera is CameraResult => camera !== null)
+        .sort((a, b) => {
+          const aVisual = a.previewUrl ? 1 : 0;
+          const bVisual = b.previewUrl ? 1 : 0;
+          if (aVisual !== bVisual) return bVisual - aVisual;
+          const aAge = a.lastFrameAgeSeconds ?? Number.POSITIVE_INFINITY;
+          const bAge = b.lastFrameAgeSeconds ?? Number.POSITIVE_INFINITY;
+          return aAge - bAge;
+        })
+    );
+  }
+
+  private async fetchCamerasByQuery(query: string, limit: number, signal: AbortSignal): Promise<CameraResult[]> {
+    const params = new URLSearchParams({ q: query, embeddable: '1', limit: String(limit) });
+    const payload = await this.requestJson(`${OPENEYE_CATALOG_URL}?${params.toString()}`, signal);
+    return uniqueCameras(
+      extractRows(payload)
+        .map(mapCameraRecord)
+        .filter((camera): camera is CameraResult => camera !== null)
+    );
+  }
+
+  private async fetchFeatured(signal: AbortSignal): Promise<CameraResult[]> {
+    const payload = await this.requestJson(OPENEYE_FEATURED_URL, signal);
+    return uniqueCameras(
+      extractRows(payload)
+        .map(mapCameraRecord)
+        .filter((camera): camera is CameraResult => camera !== null)
+    );
+  }
+
+  private async fetchRegionCameras(region: RegionFilter, signal: AbortSignal): Promise<CameraResult[]> {
+    const preset = REGION_PRESETS[region];
+
+    if (preset.query) {
+      const queried = await this.fetchCamerasByQuery(preset.query, 12, signal);
+      return queried.slice(0, GRID_LIMIT);
+    }
+
+    if (!preset.anchors?.length) {
+      const featured = await this.fetchFeatured(signal);
+      return featured.slice(0, GRID_LIMIT);
+    }
+
+    const batches = await Promise.all(
+      preset.anchors.map(anchor =>
+        this.fetchCamerasNear(anchor.latitude, anchor.longitude, SEARCH_FALLBACK_RADIUS_KM, 5, signal)
+          .then(items => items[0] ? [items[0]] : [])
+      )
+    );
+
+    let cameras = uniqueCameras(batches.flat());
+    if (cameras.length < GRID_LIMIT && region === 'all') {
+      try {
+        const featured = await this.fetchFeatured(signal);
+        cameras = uniqueCameras([...cameras, ...featured]);
+      } catch {
+        // Regional results are still usable if featured fallback fails.
+      }
+    }
+
+    return cameras.slice(0, GRID_LIMIT);
+  }
+
+  private async loadRegion(region: RegionFilter, silent = false): Promise<void> {
+    if (this.destroyed) return;
+    this.abortController?.abort();
+    const controller = new AbortController();
+    this.abortController = controller;
+
+    this.regionFilter = region;
+    this.searchMode = false;
+    this.currentLocation = null;
+    this.currentContextLabel = REGION_PRESETS[region].label;
+    if (this.searchInput && !silent) this.searchInput.value = '';
+    this.updateRegionButtons();
+
+    if (!silent) {
+      this.setBusy(true);
+      this.setStatus(`در حال دریافت وب‌کم‌های ${REGION_PRESETS[region].label} از منبع غیر یوتیوب…`, 'loading');
+      this.renderLoading('در حال دریافت وب‌کم‌های عمومی…');
+    }
+
+    try {
+      const cameras = await this.fetchRegionCameras(region, controller.signal);
+      if (controller.signal.aborted || this.destroyed) return;
+      this.cameras = cameras;
+      if (!this.selectedCameraId || !cameras.some(camera => camera.id === this.selectedCameraId)) {
+        this.selectedCameraId = cameras[0]?.id ?? null;
+      }
+
+      if (!silent) {
+        this.setStatus(
+          cameras.length
+            ? `${cameras.length} وب‌کم قابل‌نمایش دریافت شد • OpenEye • بدون اتصال مستقیم به YouTube`
+            : 'در این ناحیه وب‌کم غیر یوتیوب قابل‌نمایشی پیدا نشد.',
+          cameras.length ? 'success' : 'warning',
+        );
+      }
+      this.render();
+    } catch (error) {
+      if (controller.signal.aborted || this.destroyed) return;
+      console.error('[live-webcams] region load failed', error);
+      if (!silent) {
+        this.cameras = [];
+        this.setStatus('ارتباط با سرویس وب‌کم برقرار نشد. اتصال اینترنت یا سیاست دسترسی شبکه را بررسی کنید.', 'error');
+        this.render();
+      }
+    } finally {
+      if (this.abortController === controller) this.abortController = null;
+      if (!silent) this.setBusy(false);
+    }
+  }
+
+  private async searchCity(): Promise<void> {
+    const query = normalizeCityQuery(this.searchInput?.value ?? '');
+    if (query.length < 2) {
+      this.setStatus('نام شهر را به فارسی یا انگلیسی وارد کنید.', 'error');
+      this.searchInput?.focus();
+      return;
+    }
+
+    this.abortController?.abort();
+    const controller = new AbortController();
+    this.abortController = controller;
+    this.setBusy(true);
+    this.setStatus(`در حال یافتن موقعیت «${query}» و وب‌کم‌های اطراف آن…`, 'loading');
+    this.renderLoading('در حال جستجوی وب‌کم‌های نزدیک شهر…');
+
+    try {
+      const location = await this.geocodeCity(query, controller.signal);
+      if (!location) {
+        if (controller.signal.aborted) return;
+        this.searchMode = true;
+        this.currentLocation = null;
+        this.currentContextLabel = query;
+        this.cameras = [];
+        this.updateRegionButtons();
+        this.setStatus('شهر پیدا نشد. املای فارسی یا انگلیسی را بررسی کنید.', 'error');
+        this.render();
+        return;
+      }
+
+      let cameras = await this.fetchCamerasNear(
+        location.latitude,
+        location.longitude,
+        SEARCH_PRIMARY_RADIUS_KM,
+        SEARCH_RESULT_LIMIT,
+        controller.signal,
+      );
+
+      if (cameras.length === 0) {
+        cameras = await this.fetchCamerasNear(
+          location.latitude,
+          location.longitude,
+          SEARCH_FALLBACK_RADIUS_KM,
+          SEARCH_RESULT_LIMIT,
+          controller.signal,
+        );
+      }
+
+      if (controller.signal.aborted || this.destroyed) return;
+
+      this.searchMode = true;
+      this.currentLocation = location;
+      this.currentContextLabel = [location.name, location.country].filter(Boolean).join(' - ');
+      this.cameras = cameras;
+      this.selectedCameraId = cameras[0]?.id ?? null;
+      this.updateRegionButtons();
+
+      this.setStatus(
+        cameras.length
+          ? `${cameras.length} وب‌کم نزدیک ${this.currentContextLabel} پیدا شد • نتیجه‌ها مستقیم از YouTube دریافت نمی‌شوند.`
+          : `در شعاع ${SEARCH_FALLBACK_RADIUS_KM} کیلومتری ${this.currentContextLabel} وب‌کم غیر یوتیوب قابل‌نمایشی پیدا نشد.`,
+        cameras.length ? 'success' : 'warning',
+      );
+      this.render();
+    } catch (error) {
+      if (controller.signal.aborted || this.destroyed) return;
+      console.error('[live-webcams] city search failed', error);
+      this.searchMode = true;
+      this.currentLocation = null;
+      this.currentContextLabel = query;
+      this.cameras = [];
+      this.updateRegionButtons();
+      this.setStatus('جستجو انجام نشد. دسترسی به Open-Meteo یا OpenEye برقرار نیست.', 'error');
+      this.render();
+    } finally {
+      if (this.abortController === controller) this.abortController = null;
+      this.setBusy(false);
+    }
+  }
+
+  private clearSearch(): void {
+    this.abortController?.abort();
+    this.abortController = null;
+    this.searchMode = false;
+    this.currentLocation = null;
+    if (this.searchInput) this.searchInput.value = '';
+    this.setStatus('جستجو به فارسی و انگلیسی • منبع تصویری OpenEye • بدون اتصال مستقیم به YouTube', 'idle');
+    void this.loadRegion(this.regionFilter);
+  }
+
+  private async refreshCurrentData(): Promise<void> {
+    if (this.destroyed || this.loading || document.hidden) return;
+
+    if (!this.searchMode) {
+      await this.loadRegion(this.regionFilter, true);
+      return;
+    }
+
+    if (!this.currentLocation) return;
+
+    const controller = new AbortController();
+    try {
+      let cameras = await this.fetchCamerasNear(
+        this.currentLocation.latitude,
+        this.currentLocation.longitude,
+        SEARCH_PRIMARY_RADIUS_KM,
+        SEARCH_RESULT_LIMIT,
+        controller.signal,
+      );
+      if (cameras.length === 0) {
+        cameras = await this.fetchCamerasNear(
+          this.currentLocation.latitude,
+          this.currentLocation.longitude,
+          SEARCH_FALLBACK_RADIUS_KM,
+          SEARCH_RESULT_LIMIT,
+          controller.signal,
+        );
+      }
+      if (this.destroyed) return;
+      this.cameras = cameras;
+      if (!this.selectedCameraId || !cameras.some(camera => camera.id === this.selectedCameraId)) {
+        this.selectedCameraId = cameras[0]?.id ?? null;
+      }
+      this.render();
+    } catch {
+      // Silent refresh failure must not replace already-visible data.
+    }
+  }
+
+  private renderLoading(message: string): void {
+    this.content.className = 'panel-content oe-webcam-content';
+    this.content.replaceChildren();
+    const placeholder = document.createElement('div');
+    placeholder.className = 'oe-webcam-placeholder';
+    placeholder.textContent = message;
+    this.content.appendChild(placeholder);
+  }
+
+  private render(): void {
+    this.content.className = 'panel-content oe-webcam-content';
+    this.content.replaceChildren();
+
+    const context = document.createElement('div');
+    context.className = 'oe-webcam-context';
+
+    const title = document.createElement('div');
+    title.className = 'oe-webcam-context-title';
+    title.textContent = this.searchMode
+      ? `نتایج جستجو: ${this.currentContextLabel}`
+      : `وب‌کم‌ها: ${this.currentContextLabel}`;
+
+    const provider = document.createElement('div');
+    provider.className = 'oe-webcam-provider';
+    provider.textContent = 'OpenEye + Open-Meteo • بدون پخش YouTube';
+
+    context.append(title, provider);
+    this.content.appendChild(context);
+
+    if (this.cameras.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'oe-webcam-placeholder';
+      empty.textContent = this.searchMode
+        ? 'برای این شهر وب‌کم غیر یوتیوب قابل‌نمایشی پیدا نشد. شهر دیگری را جستجو کنید.'
+        : 'در این ناحیه فعلاً وب‌کم غیر یوتیوب قابل‌نمایشی در دسترس نیست.';
+      this.content.appendChild(empty);
+      return;
+    }
+
+    if (this.viewMode === 'single') {
+      this.renderSingle();
+    } else {
+      this.renderGrid();
+    }
+  }
+
+  private renderGrid(): void {
+    const grid = document.createElement('div');
+    grid.className = 'oe-webcam-grid';
+    const visible = this.searchMode ? this.cameras.slice(0, SEARCH_RESULT_LIMIT) : this.cameras.slice(0, GRID_LIMIT);
+    for (const camera of visible) grid.appendChild(this.createCameraCard(camera));
+    this.content.appendChild(grid);
+  }
+
+  private renderSingle(): void {
+    const selected = this.cameras.find(camera => camera.id === this.selectedCameraId) ?? this.cameras[0];
+    if (!selected) return;
+
+    const root = document.createElement('div');
+    root.className = 'oe-webcam-single';
+    root.appendChild(this.createCameraCard(selected));
+
+    if (this.cameras.length > 1) {
+      const switcher = document.createElement('div');
+      switcher.className = 'oe-webcam-switcher';
+      for (const camera of this.cameras) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `oe-webcam-switch-btn${camera.id === selected.id ? ' active' : ''}`;
+        button.textContent = camera.title;
+        button.addEventListener('click', () => {
+          this.selectedCameraId = camera.id;
+          this.render();
+        });
+        switcher.appendChild(button);
+      }
+      root.appendChild(switcher);
+    }
+
+    this.content.appendChild(root);
+  }
+
+  private createCameraCard(camera: CameraResult): HTMLElement {
+    const card = document.createElement('article');
+    card.className = 'oe-webcam-card';
+
+    const imageWrap = document.createElement('div');
+    imageWrap.className = 'oe-webcam-image-wrap';
+
+    const freshness = document.createElement('div');
+    const age = camera.lastFrameAgeSeconds;
+    const fresh = camera.live && (age == null || age <= Math.max(180, (camera.frameIntervalSeconds ?? 30) * 4));
+    const stale = age != null && age > 900;
+    freshness.className = `oe-webcam-freshness${fresh ? '' : stale ? ' stale' : ' unknown'}`;
+
+    const dot = document.createElement('span');
+    dot.className = 'oe-webcam-dot';
+    const freshnessText = document.createElement('span');
+    freshnessText.textContent = fresh
+      ? 'تصویر تازه'
+      : age != null
+        ? `آخرین فریم: ${formatFrameAge(age)}`
+        : 'وضعیت نامشخص';
+    freshness.append(dot, freshnessText);
+    imageWrap.appendChild(freshness);
+
+    if (camera.previewUrl) {
+      const image = document.createElement('img');
+      image.className = 'oe-webcam-image';
+      image.src = camera.previewUrl;
+      image.alt = camera.title;
+      image.loading = 'lazy';
+      image.referrerPolicy = 'strict-origin-when-cross-origin';
+      image.addEventListener('error', () => {
+        if (image.src !== OPENEYE_OFFLINE_IMAGE) image.src = OPENEYE_OFFLINE_IMAGE;
+      });
+      imageWrap.appendChild(image);
+    } else {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'oe-webcam-image-placeholder';
+      placeholder.textContent = 'این دوربین فقط از صفحه منبع قابل مشاهده است و تصویر مستقیمی برای جاسازی ندارد.';
+      imageWrap.appendChild(placeholder);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'oe-webcam-card-body';
+
+    const title = document.createElement('div');
+    title.className = 'oe-webcam-card-title';
+    title.textContent = camera.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'oe-webcam-card-meta';
+    const metaParts = [camera.category];
+    const distance = formatDistance(camera.distanceKm);
+    if (distance) metaParts.push(`فاصله ${distance}`);
+    const ageText = formatFrameAge(camera.lastFrameAgeSeconds);
+    if (ageText) metaParts.push(ageText);
+    meta.textContent = metaParts.join(' • ');
+
+    const footer = document.createElement('div');
+    footer.className = 'oe-webcam-card-footer';
+
+    const source = document.createElement('div');
+    source.className = 'oe-webcam-source';
+    source.textContent = camera.sourceName ? `منبع: ${camera.sourceName}` : 'فهرست OpenEye';
+
+    footer.appendChild(source);
+
+    if (camera.sourceUrl) {
+      const openButton = document.createElement('button');
+      openButton.type = 'button';
+      openButton.className = 'oe-webcam-open';
+      openButton.textContent = 'مشاهده منبع';
+      openButton.addEventListener('click', event => {
+        event.stopPropagation();
+        window.open(camera.sourceUrl!, '_blank', 'noopener,noreferrer');
+      });
+      footer.appendChild(openButton);
+    }
+
+    body.append(title, meta, footer);
+    card.append(imageWrap, body);
+    return card;
+  }
+
+  public refresh(): void {
+    void this.refreshCurrentData();
+  }
+
+  public destroy(): void {
+    this.destroyed = true;
+    this.abortController?.abort();
+    this.abortController = null;
+    if (this.refreshTimer != null) {
+      window.clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+    if (this.isFullscreen) {
+      this.element.classList.remove('oe-webcam-fullscreen');
+      document.body.classList.remove('oe-webcam-fullscreen-active');
+      this.isFullscreen = false;
+    }
+    this.searchBar?.remove();
+    this.controlsBar?.remove();
+    super.destroy();
+  }
+}
