@@ -153,3 +153,9 @@ src-tauri/notices/*
 
 # Local audit exports
 git-files.txt
+
+# Rasadyar local development artifacts
+*.bak
+*.bak_*
+webcam-files.txt
+windy-webcam-code.txt
