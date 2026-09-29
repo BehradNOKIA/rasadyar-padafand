@@ -921,6 +921,82 @@ window.addEventListener(
 
 
 /* =========================================================
+   Alerts
+========================================================= */
+
+window.addEventListener(
+  "rasadyar:open-alert-center",
+  async () => {
+
+    const { OrefSirensPanel } =
+      await import("../components/OrefSirensPanel");
+
+    const { createLegacyPanelComponent } =
+      await import("../components/LegacyPanelAdapter");
+
+    const OrefSirensPanelView =
+      createLegacyPanelComponent(
+        () => new OrefSirensPanel()
+      );
+
+    renderPanel(
+      "مرکز هشدارها",
+      OrefSirensPanelView,
+      "analysis.view"
+    );
+  }
+);
+
+
+/* =========================================================
+   Infrastructure
+========================================================= */
+
+window.addEventListener(
+  "rasadyar:open-infrastructure-center",
+  async () => {
+
+    const { CascadePanel } =
+      await import("../components/CascadePanel");
+
+    const { createLegacyPanelComponent } =
+      await import("../components/LegacyPanelAdapter");
+
+    const CascadePanelView =
+      createLegacyPanelComponent(
+        () => new CascadePanel()
+      );
+
+    renderPanel(
+      "مرکز زیرساخت‌ها",
+      CascadePanelView,
+      "analysis.view"
+    );
+  }
+);
+
+
+/* =========================================================
+   Global Monitoring
+========================================================= */
+
+window.addEventListener(
+  "rasadyar:open-global-monitoring",
+  async () => {
+
+    const GlobalMonitoringPanel =
+      await import("../components/GlobalMonitoringPanel");
+
+    renderPanel(
+      "مرکز پایش جهانی",
+      GlobalMonitoringPanel.default,
+      "analysis.view"
+    );
+  }
+);
+
+
+/* =========================================================
    Explicit close
 ========================================================= */
 

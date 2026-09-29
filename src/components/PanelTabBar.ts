@@ -433,6 +433,9 @@ export class PanelTabBar {
         'smart-analysis': 'rasadyar:open-analysis-center',
         reports: 'rasadyar:open-report-center',
         settings: 'rasadyar:open-system-settings',
+        alerts: 'rasadyar:open-alert-center',
+        infrastructure: 'rasadyar:open-infrastructure-center',
+        'global-monitoring': 'rasadyar:open-global-monitoring',
       };
 
       const directEvent = directEventBySection[item.key];
