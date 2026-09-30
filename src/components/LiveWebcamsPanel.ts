@@ -226,7 +226,7 @@ export class LiveWebcamsPanel extends Panel {
   private currentLocation: SearchLocation | null = null;
   private currentContextLabel = 'نمای جهانی';
   private loading = false;
-  private destroyed = false;
+ private panelDestroyed = false;
   private requestSerial = 0;
   private refreshTimer: number | null = null;
 
@@ -1057,7 +1057,7 @@ export class LiveWebcamsPanel extends Panel {
   }
 
   private async loadRegion(region: RegionFilter, silent = false): Promise<void> {
-    if (this.destroyed) return;
+    if (this.panelDestroyed) return;
     const serial = ++this.requestSerial;
 
     this.regionFilter = region;
@@ -1069,7 +1069,7 @@ export class LiveWebcamsPanel extends Panel {
 
     if (this.sourceMode === 'youtube') {
       const cameras = this.getYoutubeRegionCameras(region);
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
       this.cameras = cameras;
       this.selectedCameraId = cameras[0]?.id ?? null;
 
@@ -1103,7 +1103,7 @@ export class LiveWebcamsPanel extends Panel {
 
     try {
       const cameras = await this.fetchWindyRegion(region);
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
 
       this.cameras = cameras;
       if (!this.selectedCameraId || !cameras.some(camera => camera.id === this.selectedCameraId)) {
@@ -1120,7 +1120,7 @@ export class LiveWebcamsPanel extends Panel {
       }
       this.render();
     } catch (error) {
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
       console.error('[live-webcams] Windy region load failed:', error);
       if (!silent) {
         this.cameras = [];
@@ -1144,7 +1144,7 @@ export class LiveWebcamsPanel extends Panel {
 
     if (this.sourceMode === 'youtube') {
       const cameras = this.searchYoutube(query);
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
 
       this.searchMode = true;
       this.currentLocation = null;
@@ -1168,7 +1168,7 @@ export class LiveWebcamsPanel extends Panel {
 
     try {
       const location = await this.geocodeCity(query);
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
 
       if (!location) {
         this.searchMode = true;
@@ -1187,7 +1187,7 @@ export class LiveWebcamsPanel extends Panel {
         SEARCH_PRIMARY_RADIUS_KM,
         SEARCH_RESULT_LIMIT,
       );
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
 
       if (entries.length === 0) {
         entries = await this.fetchWindyEntriesNear(
@@ -1197,10 +1197,10 @@ export class LiveWebcamsPanel extends Panel {
           SEARCH_RESULT_LIMIT,
         );
       }
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
 
       const cameras = await this.hydrateWindyBatch(entries);
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
 
       this.searchMode = true;
       this.currentLocation = location;
@@ -1217,7 +1217,7 @@ export class LiveWebcamsPanel extends Panel {
       );
       this.render();
     } catch (error) {
-      if (serial !== this.requestSerial || this.destroyed) return;
+      if (serial !== this.requestSerial || this.panelDestroyed) return;
       console.error('[live-webcams] Windy city search failed:', error);
       this.searchMode = true;
       this.currentLocation = null;
@@ -1246,7 +1246,7 @@ export class LiveWebcamsPanel extends Panel {
   }
 
   private async refreshCurrentData(): Promise<void> {
-    if (this.destroyed || this.loading || document.hidden || this.sourceMode !== 'windy') return;
+    if (this.panelDestroyed || this.loading || document.hidden || this.sourceMode !== 'windy') return;
 
     // Reloading obtains a fresh player URL after the project's own 9-minute cache expires.
     if (this.searchMode && this.currentLocation) {
@@ -1468,7 +1468,7 @@ export class LiveWebcamsPanel extends Panel {
   }
 
   public destroy(): void {
-    this.destroyed = true;
+    this.panelDestroyed = true;
     this.requestSerial++;
 
     if (this.refreshTimer != null) {
