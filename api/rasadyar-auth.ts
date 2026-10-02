@@ -33,7 +33,10 @@ function json(
     ...extraHeaders,
   });
 
-  return new Response(JSON.stringify(body), { status, headers });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers,
+  });
 }
 
 function parseCookies(request: Request): Record<string, string> {
@@ -46,6 +49,7 @@ function parseCookies(request: Request): Record<string, string> {
 
     const name = part.slice(0, index).trim();
     const value = part.slice(index + 1).trim();
+
     if (!name) continue;
 
     try {
@@ -86,38 +90,70 @@ function expiredSessionCookie(): string {
 }
 
 function assertSameOrigin(request: Request): void {
-  const fetchSite = String(request.headers.get('sec-fetch-site') ?? '').toLowerCase();
-  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
-    throw new RasadyarAuthError('csrf-rejected', 403);
+  const fetchSite = String(
+    request.headers.get('sec-fetch-site') ?? '',
+  ).toLowerCase();
+
+  if (
+    fetchSite &&
+    fetchSite !== 'same-origin' &&
+    fetchSite !== 'none'
+  ) {
+    throw new RasadyarAuthError(
+      'csrf-rejected',
+      403,
+    );
   }
 
   const origin = request.headers.get('origin');
+
   if (!origin) return;
 
   if (origin !== new URL(request.url).origin) {
-    throw new RasadyarAuthError('csrf-rejected', 403);
+    throw new RasadyarAuthError(
+      'csrf-rejected',
+      403,
+    );
   }
 }
 
-async function readJsonBody(request: Request): Promise<any> {
+async function readJsonBody(
+  request: Request,
+): Promise<any> {
   const raw = await request.text();
+
   if (!raw) return {};
 
-  if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) {
-    throw new RasadyarAuthError('payload-too-large', 413);
+  if (
+    new TextEncoder()
+      .encode(raw)
+      .byteLength > MAX_BODY_BYTES
+  ) {
+    throw new RasadyarAuthError(
+      'payload-too-large',
+      413,
+    );
   }
 
   try {
     return JSON.parse(raw);
   } catch {
-    throw new RasadyarAuthError('invalid-json', 400);
+    throw new RasadyarAuthError(
+      'invalid-json',
+      400,
+    );
   }
 }
 
 function routeParts(request: Request): string[] {
   const url = new URL(request.url);
-  const explicitPath = url.searchParams.get('path');
-  const routePrefix = '/api/rasadyar-auth/';
+
+  const explicitPath =
+    url.searchParams.get('path');
+
+  const routePrefix =
+    '/api/rasadyar-auth/';
+
   const rawPath =
     explicitPath !== null
       ? explicitPath
@@ -132,158 +168,465 @@ function routeParts(request: Request): string[] {
 }
 
 function clientAddress(request: Request): string {
-  return String(request.headers.get('x-forwarded-for') ?? '')
+  return String(
+    request.headers.get('x-forwarded-for') ?? '',
+  )
     .split(',')[0]
     .trim() || 'unknown';
 }
 
-function loginIdentity(request: Request, username: string): string {
+function loginIdentity(
+  request: Request,
+  username: string,
+): string {
   return `${clientAddress(request)}:${username.trim().toLocaleLowerCase('en-US')}`;
 }
 
-async function requireSession(request: Request): Promise<PublicUser> {
-  const token = parseCookies(request)[SESSION_COOKIE];
-  const user = await getUserForSessionToken(token);
-  if (!user) throw new RasadyarAuthError('unauthorized', 401);
+async function requireSession(
+  request: Request,
+): Promise<PublicUser> {
+  const token =
+    parseCookies(request)[SESSION_COOKIE];
+
+  const user =
+    await getUserForSessionToken(token);
+
+  if (!user) {
+    throw new RasadyarAuthError(
+      'unauthorized',
+      401,
+    );
+  }
+
   return user;
 }
+async function handleAuthRequest(
+  request: Request,
+): Promise<Response> {
+  const method =
+    request.method.toUpperCase();
 
-async function handleAuthRequest(request: Request): Promise<Response> {
-  const method = request.method.toUpperCase();
-  const parts = routeParts(request);
+  const parts =
+    routeParts(request);
+
 
   if (method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
       headers: {
-        Allow: 'GET, POST, PATCH, DELETE, OPTIONS',
-        'Cache-Control': 'no-store',
+        Allow:
+          'GET, POST, PATCH, DELETE, OPTIONS',
+        'Cache-Control':
+          'no-store',
       },
     });
   }
 
-  if (method === 'GET' && parts.length === 1 && parts[0] === 'status') {
-    return json(200, { ok: true, ...(await getAuthStatus()) });
+
+  if (
+    method === 'GET' &&
+    parts.length === 1 &&
+    parts[0] === 'status'
+  ) {
+    return json(
+      200,
+      {
+        ok: true,
+        ...(await getAuthStatus()),
+      },
+    );
   }
 
-  if (method === 'POST' && parts.length === 1 && parts[0] === 'migrate') {
+
+  if (
+    method === 'POST' &&
+    parts.length === 1 &&
+    parts[0] === 'migrate'
+  ) {
     assertSameOrigin(request);
-    const body = await readJsonBody(request);
-    const result = await migrateLegacyUsers(body?.users);
-    return json(200, { ok: true, ...result });
+
+    const body =
+      await readJsonBody(request);
+
+    const result =
+      await migrateLegacyUsers(body?.users);
+
+    return json(
+      200,
+      {
+        ok: true,
+        ...result,
+      },
+    );
   }
 
-  if (method === 'POST' && parts.length === 1 && parts[0] === 'login') {
+
+  if (
+    method === 'POST' &&
+    parts.length === 1 &&
+    parts[0] === 'login'
+  ) {
     assertSameOrigin(request);
 
-    const body = await readJsonBody(request);
-    const username = String(body?.username ?? '').trim();
-    const password = String(body?.password ?? '');
-    const identity = loginIdentity(request, username);
+    const body =
+      await readJsonBody(request);
+
+    const username =
+      String(body?.username ?? '').trim();
+
+    const password =
+      String(body?.password ?? '');
+
+    const identity =
+      loginIdentity(
+        request,
+        username,
+      );
 
     await assertLoginAllowed(identity);
 
-    const result = await loginUser(username, password);
+
+    const result =
+      await loginUser(
+        username,
+        password,
+      );
+
+
     if (!result) {
       await recordLoginFailure(identity);
-      throw new RasadyarAuthError('invalid-credentials', 401);
+
+      throw new RasadyarAuthError(
+        'invalid-credentials',
+        401,
+      );
     }
+
 
     await clearLoginFailures(identity);
 
+
     return json(
       200,
-      { ok: true, user: result.user },
-      { 'Set-Cookie': sessionCookie(result.sessionToken, result.expiresAt) },
+      {
+        ok: true,
+        user: result.user,
+      },
+      {
+        'Set-Cookie':
+          sessionCookie(
+            result.sessionToken,
+            result.expiresAt,
+          ),
+      },
     );
   }
 
-  if (method === 'POST' && parts.length === 1 && parts[0] === 'logout') {
+
+  if (
+    method === 'POST' &&
+    parts.length === 1 &&
+    parts[0] === 'logout'
+  ) {
     assertSameOrigin(request);
 
-    const token = parseCookies(request)[SESSION_COOKIE];
+    const token =
+      parseCookies(request)[SESSION_COOKIE];
+
     await logoutSession(token);
 
+
     return json(
       200,
-      { ok: true },
-      { 'Set-Cookie': expiredSessionCookie() },
+      {
+        ok: true,
+      },
+      {
+        'Set-Cookie':
+          expiredSessionCookie(),
+      },
     );
   }
 
-  if (method === 'GET' && parts.length === 1 && parts[0] === 'me') {
-    const user = await requireSession(request);
-    return json(200, { ok: true, user });
+
+  /*
+     =====================================================
+     Superadmin deploy trigger
+     =====================================================
+  */
+
+  if (
+    method === 'POST' &&
+    parts.length === 2 &&
+    parts[0] === 'system' &&
+    parts[1] === 'update'
+  ) {
+    assertSameOrigin(request);
+
+
+    const actor =
+      await requireSession(request);
+
+
+    if (
+      actor.role !== 'superadmin'
+    ) {
+      throw new RasadyarAuthError(
+        'forbidden',
+        403,
+      );
+    }
+
+
+    const hookUrl =
+      process.env.RASADYAR_DEPLOY_HOOK_URL ?? '';
+
+
+    if (!hookUrl) {
+      throw new RasadyarAuthError(
+        'deploy-hook-not-configured',
+        503,
+      );
+    }
+
+
+    const deployResponse =
+      await fetch(
+        hookUrl,
+        {
+          method: 'POST',
+        },
+      );
+
+
+    if (!deployResponse.ok) {
+      throw new RasadyarAuthError(
+        'deploy-trigger-failed',
+        502,
+      );
+    }
+
+
+    return json(
+      200,
+      {
+        ok: true,
+        message:
+          'deploy-triggered',
+      },
+    );
   }
 
-  if (parts[0] === 'users') {
-    const actor = await requireSession(request);
 
-    if (method === 'GET' && parts.length === 1) {
-      return json(200, {
+
+  if (
+    method === 'GET' &&
+    parts.length === 1 &&
+    parts[0] === 'me'
+  ) {
+    const user =
+      await requireSession(request);
+
+    return json(
+      200,
+      {
         ok: true,
-        users: await listUsersForAdmin(actor),
-      });
+        user,
+      },
+    );
+  }
+
+
+
+  if (
+    parts[0] === 'users'
+  ) {
+
+    const actor =
+      await requireSession(request);
+
+
+
+    if (
+      method === 'GET' &&
+      parts.length === 1
+    ) {
+      return json(
+        200,
+        {
+          ok: true,
+          users:
+            await listUsersForAdmin(actor),
+        },
+      );
     }
+
+
 
     assertSameOrigin(request);
 
-    if (method === 'POST' && parts.length === 1) {
-      const body = await readJsonBody(request);
-      return json(201, {
-        ok: true,
-        users: await createManagedUser(actor, body),
-      });
+
+
+    if (
+      method === 'POST' &&
+      parts.length === 1
+    ) {
+
+      const body =
+        await readJsonBody(request);
+
+
+      return json(
+        201,
+        {
+          ok: true,
+          users:
+            await createManagedUser(
+              actor,
+              body,
+            ),
+        },
+      );
     }
 
-    if (parts.length >= 2) {
-      const username = parts[1];
 
-      if (method === 'PATCH' && parts.length === 2) {
-        const body = await readJsonBody(request);
-        return json(200, {
-          ok: true,
-          users: await updateManagedUser(actor, username, body),
-        });
+
+    if (
+      parts.length >= 2
+    ) {
+
+      const username =
+        parts[1];
+
+
+
+      if (
+        method === 'PATCH' &&
+        parts.length === 2
+      ) {
+
+        const body =
+          await readJsonBody(request);
+
+
+        return json(
+          200,
+          {
+            ok: true,
+            users:
+              await updateManagedUser(
+                actor,
+                username,
+                body,
+              ),
+          },
+        );
       }
 
-      if (method === 'DELETE' && parts.length === 2) {
-        await deleteManagedUser(actor, username);
-        return json(200, { ok: true });
+
+
+      if (
+        method === 'DELETE' &&
+        parts.length === 2
+      ) {
+
+        await deleteManagedUser(
+          actor,
+          username,
+        );
+
+
+        return json(
+          200,
+          {
+            ok: true,
+          },
+        );
       }
 
-      if (method === 'POST' && parts.length === 3 && parts[2] === 'password') {
-        const body = await readJsonBody(request);
-        return json(200, {
-          ok: true,
-          users: await resetManagedPassword(actor, username, body?.password),
-        });
+
+
+      if (
+        method === 'POST' &&
+        parts.length === 3 &&
+        parts[2] === 'password'
+      ) {
+
+        const body =
+          await readJsonBody(request);
+
+
+        return json(
+          200,
+          {
+            ok: true,
+            users:
+              await resetManagedPassword(
+                actor,
+                username,
+                body?.password,
+              ),
+          },
+        );
       }
     }
   }
 
-  throw new RasadyarAuthError('not-found', 404);
+
+
+  throw new RasadyarAuthError(
+    'not-found',
+    404,
+  );
 }
+
+
 
 export default async function rasadyarAuthHandler(
   request: Request,
 ): Promise<Response> {
+
   try {
-    return await handleAuthRequest(request);
+
+    return await handleAuthRequest(
+      request,
+    );
+
   } catch (error: unknown) {
-    if (error instanceof RasadyarAuthError) {
-      return json(error.status, {
-        ok: false,
-        code: error.code,
-        message: error.code,
-      });
+
+
+    if (
+      error instanceof RasadyarAuthError
+    ) {
+
+      return json(
+        error.status,
+        {
+          ok: false,
+          code:
+            error.code,
+          message:
+            error.code,
+        },
+      );
     }
 
-    console.error('[rasadyar-auth] production error:', error);
-    return json(500, {
-      ok: false,
-      code: 'internal-error',
-      message: 'internal-error',
-    });
+
+    console.error(
+      '[rasadyar-auth] production error:',
+      error,
+    );
+
+
+    return json(
+      500,
+      {
+        ok: false,
+        code:
+          'internal-error',
+        message:
+          'internal-error',
+      },
+    );
   }
 }
