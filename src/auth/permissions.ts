@@ -14,21 +14,32 @@ export type RasadyarRole =
 export type RasadyarPermission =
   | "dashboard.view"
   | "map.view"
+
   | "analysis.view"
   | "analysis.create"
   | "analysis.edit"
+
   | "report.view"
   | "report.create"
   | "report.edit"
   | "report.publish"
   | "report.delete"
+
+  // User management
   | "users.manage"
   | "users.create"
   | "users.edit"
   | "users.delete"
+  | "users.request_create"
+  | "users.approve"
+
+  // System
   | "system.settings"
   | "system.update"
+
+  // Profile
   | "profile.edit";
+
 
 const SUPERADMIN_PERMISSIONS: readonly RasadyarPermission[] = [
   "dashboard.view",
@@ -44,15 +55,19 @@ const SUPERADMIN_PERMISSIONS: readonly RasadyarPermission[] = [
   "report.publish",
   "report.delete",
 
+  // Full user management
   "users.manage",
   "users.create",
   "users.edit",
   "users.delete",
+  "users.approve",
 
   "system.settings",
   "system.update",
+
   "profile.edit",
 ];
+
 
 const ADMIN_PERMISSIONS: readonly RasadyarPermission[] = [
   "dashboard.view",
@@ -68,14 +83,17 @@ const ADMIN_PERMISSIONS: readonly RasadyarPermission[] = [
   "report.publish",
   "report.delete",
 
+  // Admin user management
+  // No direct create/delete
   "users.manage",
-  "users.create",
   "users.edit",
-  "users.delete",
+  "users.request_create",
 
   "system.settings",
+
   "profile.edit",
 ];
+
 
 const ANALYST_PERMISSIONS: readonly RasadyarPermission[] = [
   "dashboard.view",
@@ -92,6 +110,7 @@ const ANALYST_PERMISSIONS: readonly RasadyarPermission[] = [
   "profile.edit",
 ];
 
+
 const VIEWER_PERMISSIONS: readonly RasadyarPermission[] = [
   "dashboard.view",
   "map.view",
@@ -100,6 +119,7 @@ const VIEWER_PERMISSIONS: readonly RasadyarPermission[] = [
 
   "profile.edit",
 ];
+
 
 export const ROLE_PERMISSIONS: Readonly<
   Record<RasadyarRole, readonly RasadyarPermission[]>
@@ -110,10 +130,13 @@ export const ROLE_PERMISSIONS: Readonly<
   viewer: VIEWER_PERMISSIONS,
 };
 
+
 export function normalizeRole(
   value: unknown,
 ): RasadyarRole | null {
+
   switch (String(value ?? "").trim().toLowerCase()) {
+
     case "superadmin":
       return "superadmin";
 
@@ -131,9 +154,11 @@ export function normalizeRole(
   }
 }
 
+
 export function getRolePermissions(
   role: unknown,
 ): RasadyarPermission[] {
+
   const normalizedRole = normalizeRole(role);
 
   if (!normalizedRole) {
@@ -145,9 +170,11 @@ export function getRolePermissions(
   ];
 }
 
+
 export function isRasadyarPermission(
   value: unknown,
 ): value is RasadyarPermission {
+
   return (
     typeof value === "string" &&
     SUPERADMIN_PERMISSIONS.includes(
