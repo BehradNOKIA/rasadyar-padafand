@@ -308,6 +308,12 @@ function assertManageRole(role: RasadyarServerRole): void {
   }
 }
 
+function assertSuperAdminRole(role: RasadyarServerRole): void {
+  if (role !== 'superadmin') {
+    throw new RasadyarAuthError('forbidden', 403);
+  }
+}
+
 function findUser(
   store: AuthStoreFile,
   username: string,
@@ -512,7 +518,7 @@ export async function createManagedUser(
     role?: unknown;
   },
 ): Promise<PublicUser[]> {
-  assertManageRole(actor.role);
+  assertSuperAdminRole(actor.role);
 
   const username = normalizeUsername(input?.username);
   const name = normalizeName(input?.name);
@@ -526,9 +532,13 @@ export async function createManagedUser(
     throw new RasadyarAuthError('invalid-name', 400);
   }
   assertPasswordPolicy(password);
-  if (role !== 'analyst' && role !== 'viewer') {
-    throw new RasadyarAuthError('invalid-role', 400);
-  }
+  if (
+  role !== 'admin' &&
+  role !== 'analyst' &&
+  role !== 'viewer'
+) {
+  throw new RasadyarAuthError('invalid-role', 400);
+}
 
   const { salt, hash } = await hashPassword(password);
 
@@ -621,7 +631,7 @@ export async function deleteManagedUser(
   actor: PublicUser,
   targetUsername: string,
 ): Promise<void> {
-  assertManageRole(actor.role);
+  assertSuperAdminRole(actor.role);
 
   await mutateStore((store) => {
     const target = findUser(store, targetUsername);
@@ -629,9 +639,7 @@ export async function deleteManagedUser(
     if (target.role === 'superadmin') {
       throw new RasadyarAuthError('protected-superadmin', 403);
     }
-    if (target.role === 'admin' && actor.role !== 'superadmin') {
-      throw new RasadyarAuthError('protected-admin', 403);
-    }
+
     if (usernameKey(target.username) === usernameKey(actor.username)) {
       throw new RasadyarAuthError('cannot-delete-current-user', 400);
     }
