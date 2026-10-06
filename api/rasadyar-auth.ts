@@ -388,15 +388,17 @@ async function handleAuthRequest(
         503,
       );
     }
-
-
-    const deployResponse =
-      await fetch(
-        hookUrl,
-        {
-          method: 'POST',
-        },
-      );
+const deployResponse =
+  await fetch(
+    hookUrl,
+    {
+      method: 'POST',
+      headers: {
+        'X-Update-Token':
+          process.env.RASADYAR_UPDATE_TOKEN ?? '',
+      },
+    },
+  );
 
 
     if (!deployResponse.ok) {

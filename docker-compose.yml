@@ -21,6 +21,8 @@ services:
     ports:
       - "${WM_PORT:-3000}:8080"
     environment:
+      RASADYAR_DEPLOY_HOOK_URL: "http://host.docker.internal:9000/update"
+      RASADYAR_UPDATE_TOKEN: "change-this-token"
       UPSTASH_REDIS_REST_URL: "http://redis-rest:80"
       UPSTASH_REDIS_REST_TOKEN: "${REDIS_TOKEN:?REDIS_TOKEN required — generate with: openssl rand -hex 32}"
       WM_SESSION_SECRET: "${WM_SESSION_SECRET:?WM_SESSION_SECRET required — generate with: openssl rand -hex 32}"
