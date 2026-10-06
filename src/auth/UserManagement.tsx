@@ -19,6 +19,7 @@ import {
 } from "./AuthProvider";
 
 type ManagedRole =
+"admin"
   | "analyst"
   | "viewer";
 
