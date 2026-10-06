@@ -928,17 +928,21 @@ export default function UserManagement() {
             role
           }
           onChange={
-            (event) =>
-              setRole(
-                event.target.value === "analyst"
-                  ? "analyst"
-                  : "viewer"
-              )
-          }
+  (event) =>
+    setRole(
+      event.target.value as "admin" | "analyst" | "viewer"
+    )
+}
           style={
             inputStyle
           }
         >
+        <option
+  value=
+    "admin"
+>
+  ادمین
+</option>
           <option
             value=
               "viewer"
@@ -1223,19 +1227,23 @@ export default function UserManagement() {
                             disabled={
                               !canEditUsers
                             }
-                            onChange={
-                              (event) =>
-                                handleRoleChange(
-                                  user,
-                                  event.target.value === "analyst"
-                                    ? "analyst"
-                                    : "viewer"
-                                )
-                            }
+                           onChange={
+  (event) =>
+    handleRoleChange(
+      user,
+      event.target.value as "admin" | "analyst" | "viewer"
+    )
+}
                             style={
                               smallInputStyle
                             }
                           >
+                          <option
+  value=
+    "admin"
+>
+  ادمین
+</option>
                             <option
                               value=
                                 "viewer"
